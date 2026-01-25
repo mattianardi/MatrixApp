@@ -1,0 +1,8 @@
+{
+  "name": "Fridge44 - Smart AI Food Manager",
+  "description": "An AI-powered household assistant to track stock, predict purchases, suggest recipes, and reduce food waste with a family-shared ecosystem.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
