@@ -45,6 +45,7 @@ export type ShoppingItem = {
   isPurchased: boolean;
   confidence?: 'Alta' | 'Media' | 'Bassa';
   reason?: string;
+  notes?: string;
 };
 
 export type CartHistory = {
