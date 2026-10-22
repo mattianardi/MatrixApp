@@ -149,12 +149,40 @@ Si attiva con `-drive file=build/neos.disk,format=raw,if=ide` (`make run` lo cre
 
 ## Rete e pacchetti
 
-Driver e1000, ARP/IPv4/ICMP/UDP/TCP, DHCP, DNS, client HTTP. Pacchetti NPK con indice e SHA-256:
-`pkg update | list | info | install | remove` (installa in `/opt/<nome>`). Repository: `tools/mkrepo.py`.
+NIC: **virtio-net, e1000/e1000e (82540/82545/82574…), RTL8139**; ARP/IPv4/ICMP/UDP/TCP, DHCP, DNS, client HTTP.
+**Wi-Fi non è supportato** (servono driver del chipset, firmware e WPA): usare Ethernet o il tethering/adattatore USB-Ethernet
+quando esisterà il driver CDC-ECM (oggi riconosciuto ma non attivo).
 
-**Sicurezza**: il trasporto è HTTP semplice finché non esiste TLS, quindi `pkg` lo rifiuta finché non si imposta
-`pkg.allow_insecure on`. Per un’integrità reale fissare l’indice con `pkg.index_sha256` (hash comunicato fuori banda).
-I pacchetti sono verificati per dimensione e SHA-256 e validati per intero prima di scrivere qualsiasi file.
+Un solo modello di pacchetto (**NPK**, `/opt/<nome>`, link in `/opt/bin`, registro in `/var/pkg`, cache offline in
+`/var/cache/pkg`, dipendenze da `.pkginfo`), con più *backend* in `/lib/neos/pkg/`:
+
+| Comando | Cosa fa |
+|---|---|
+| `pkg install <nome>` / `pkg install tar:<url>` | repository NPK (`pkg.repo`), tar |
+| `pip install <nome>` (shell NEOS o `python -m pip`) | wheel PyPI in `/opt/python-…`, tramite il Python di NEOS |
+| `apt install <nome>` / `dpkg -i x.deb` | pacchetti Debian (senza zstd), estratti in `/opt`, indice non autenticato |
+| AIH: «installa numpy» | sceglie il backend giusto e passa dal gate degli agenti (`pkg:*`) |
+
+I programmi Linux nativi (`apt`, `pip`, `dpkg`) usano gli stessi backend, quindi registro e PATH restano coerenti.
+Python 3.13 + glibc + ca-certificates arrivano come moduli di avvio (`PYBUNDLE`), HTTPS lo offre OpenSSL di Python.
+**Sicurezza**: il kernel parla solo HTTP semplice, quindi `pkg` lo rifiuta finché non si imposta `pkg.allow_insecure on`;
+integrità reale con `pkg.index_sha256`. I pacchetti sono validati per intero (dimensione + SHA-256) prima di scrivere.
+
+## USB
+
+Stack **xHCI** (polling): enumerazione porte, tastiera/mouse HID (boot protocol, tablet QEMU), **memorie di massa**
+(BOT/SCSI) con montaggio **FAT12/16/32** (nomi lunghi) in `/mnt/usb` e scrittura al `usb umount`.
+`usb` elenca i dispositivi. Non supportati: hub, UVC/audio, EHCI/OHCI-only, stampanti.
+**NI-DAQmx** non si può installare: sono driver proprietari per kernel Linux/Windows; l'ecosistema è fuori portata.
+
+## Avvio
+
+```
+make run         # QEMU, seriale su stdio
+make gui         # QEMU con finestra grafica 1024x768
+make iso         # build/neos.iso (GRUB): avviabile da VirtualBox/VMware/PC BIOS
+make run-iso
+```
 
 ## Build e test
 
@@ -180,8 +208,8 @@ persistenza su disco, workspace grafico e browser.
 | Windows: solo PE64 con API Win32 di base | niente GUI Win32, DirectX, servizi, registro completo, PE a 32 bit |
 | Browser: niente JavaScript/CSS/HTTPS | le web-app moderne con JS non funzionano |
 | SMP/APIC (un solo core), tickless, priority inheritance | da fare |
-| USB, audio, GPU, altri driver di rete (oggi e1000, ATA PIO, PS/2, Bochs VBE) | da fare |
-| Hardware reale | provato solo su QEMU |
+| Wi-Fi, audio, GPU, hub USB, NIC Realtek RTL8168 / Intel I219 | da fare |
+| Hardware reale | provato solo su QEMU (xHCI/USB inclusi) |
 
 Il non-determinismo noto: il kernel gira su QEMU/TCG, quindi le misure di jitter (`rt`) riflettono l'host;
 su hardware reale con TSC invariante le statistiche diventano significative.
