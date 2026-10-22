@@ -142,9 +142,14 @@ static int from_ps2(void)
     return -1;
 }
 
+volatile int key_grab;                  /* set by the workspace while a window other than the terminal owns the (PS/2) keyboard; the serial console always stays with the shell */
+
 int key_poll(void)
 {
+    if (key_grab) return from_serial();
     if (kit != kih) { int c = kinject[kit]; kit = (kit + 1) & 15; return c; }
     int k = from_serial();
     return k >= 0 ? k : from_ps2();
 }
+
+int key_poll_raw(void) { return from_ps2(); }

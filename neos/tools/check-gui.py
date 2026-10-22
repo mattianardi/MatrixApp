@@ -45,7 +45,7 @@ img = s.shot('/tmp/neos-gui-5')
 check(pix(img, 700, 600) == 0x1B2330 or pix(img, 700, 560) == 0x1B2330, 'agents window reopened from taskbar')
 
 # AI Help button -> types "aih " into the shell; the rest goes through the keyboard
-click(426, 746)
+click(540, 746)
 s.cmd('show me the processes', wait=4)
 img = s.shot('/tmp/neos-gui-6')
 out = s.close()

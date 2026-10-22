@@ -2,6 +2,7 @@
 #include "net.h"
 #include "agent.h"
 #include "varbus.h"
+#include "browser.h"
 
 /*
  * The NEOS workspace. One screen: a desktop with the live terminal (the same command stream and dock as the
@@ -51,13 +52,15 @@ static void font_from_vga(void)
 }
 
 /* ------------------------------------------------------------ drawing primitives (on bb) */
-static void px(int x, int y, u32 c) { if ((unsigned)x < SW && (unsigned)y < SH) bb[y * SW + x] = c; }
+static int clx0, cly0 = 0, clx1 = SW, cly1 = SH;                         /* clip rectangle (the browser viewport sets it) */
+static void px(int x, int y, u32 c) { if (x >= clx0 && x < clx1 && y >= cly0 && y < cly1) bb[y * SW + x] = c; }
 static void rect(int x, int y, int w, int h, u32 c)
 {
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > SW) w = SW - x;
-    if (y + h > SH) h = SH - y;
+    if (x < clx0) { w -= clx0 - x; x = clx0; }
+    if (y < cly0) { h -= cly0 - y; y = cly0; }
+    if (x + w > clx1) w = clx1 - x;
+    if (y + h > cly1) h = cly1 - y;
+    if (w <= 0 || h <= 0) return;
     for (int j = 0; j < h; j++) { u32 *p = bb + (y + j) * SW + x; for (int i = 0; i < w; i++) p[i] = c; }
 }
 static void frame(int x, int y, int w, int h, u32 c) { rect(x, y, w, 1, c); rect(x, y + h - 1, w, 1, c); rect(x, y, 1, h, c); rect(x + w - 1, y, 1, h, c); }
@@ -76,19 +79,20 @@ static int text(int x, int y, const char *s, u32 fg) { for (; *s; s++, x += 8) g
 static void textc(int x, int y, int w, const char *s, u32 fg) { int l = (int)strlen(s); text(x + (w - l * 8) / 2, y, s, fg); }
 
 /* ------------------------------------------------------------ windows and click regions */
-enum { W_TERM, W_MON, W_AGENTS, NWIN };
+enum { W_TERM, W_MON, W_AGENTS, W_BROWSER, NWIN };
 struct win { int x, y, w, h; const char *title; int visible; };       /* w/h = client size */
 static struct win wins[NWIN] = {
     { 20, 40, 640, 400, "Terminal - NEOS shell", 1 },
     { 690, 40, 310, 300, "System Monitor", 1 },
     { 430, 470, 570, 220, "Agents", 1 },
+    { 70, 70, 760, 520, "Browser", 0 },
 };
-static int zorder[NWIN] = { W_MON, W_AGENTS, W_TERM };               /* back to front */
+static int zorder[NWIN] = { W_BROWSER, W_MON, W_AGENTS, W_TERM };               /* back to front */
 static int focus = W_TERM;
 
-enum { R_BODY, R_TITLE, R_CLOSE, R_TASK, R_APPROVE, R_DENY, R_FREEZE, R_AIH };
+enum { R_BODY, R_TITLE, R_CLOSE, R_TASK, R_APPROVE, R_DENY, R_FREEZE, R_AIH, R_BTOOL, R_BURL, R_BLINK, R_BFIELD, R_BSUB, R_BCHK, R_BSCRL };
 struct region { int x, y, w, h, kind, arg; };
-#define MAXREG 96
+#define MAXREG 400
 static struct region regs[MAXREG]; static int nregs;
 static void add_region(int x, int y, int w, int h, int kind, int arg) { if (nregs < MAXREG) regs[nregs++] = (struct region){ x, y, w, h, kind, arg }; }
 
@@ -206,6 +210,82 @@ static void draw_agents(void)
     text(w->x + 196, w->y + w->h - 28, frozen ? "AGENTS FROZEN" : "agents running under policy", frozen ? COL_BAD : COL_DIM);
 }
 
+
+/* ------------------------------------------------------------ browser window */
+static int bscroll;
+static int viewport(int *x, int *y, int *w, int *h) { struct win *b = &wins[W_BROWSER]; *x = b->x; *y = b->y + 30; *w = b->w - 14; *h = b->h - 30 - 20; return 0; }
+
+static void add_clipped(int x, int y, int w, int h, int vx, int vy, int vw, int vh, int kind, int arg)
+{
+    int x1 = x < vx ? vx : x, y1 = y < vy ? vy : y, x2 = x + w > vx + vw ? vx + vw : x + w, y2 = y + h > vy + vh ? vy + vh : y + h;
+    if (x2 > x1 && y2 > y1) add_region(x1, y1, x2 - x1, y2 - y1, kind, arg);
+}
+
+static void draw_browser(void)
+{
+    struct win *w = &wins[W_BROWSER]; int vx, vy, vw, vh; viewport(&vx, &vy, &vw, &vh);
+    br_layout(vw);
+    int maxs = br_doc_height() - vh; if (maxs < 0) maxs = 0; if (bscroll > maxs) bscroll = maxs; if (bscroll < 0) bscroll = 0;
+    /* toolbar */
+    rect(w->x, w->y, w->w, 28, 0x141B27);
+    button(w->x + 4, w->y + 3, 26, 22, "<", br_can_back() ? 0x25354D : 0x161D29, R_BTOOL, 0);
+    button(w->x + 34, w->y + 3, 26, 22, ">", br_can_forward() ? 0x25354D : 0x161D29, R_BTOOL, 1);
+    button(w->x + 64, w->y + 3, 26, 22, "R", 0x25354D, R_BTOOL, 2);
+    int ux = w->x + 96, uw = w->w - 104;
+    rect(ux, w->y + 3, uw, 22, 0x0B0F16); frame(ux, w->y + 3, uw, 22, br_focus == -2 ? COL_ACC : 0x3A4660);
+    clx0 = ux + 2; clx1 = ux + uw - 2;
+    { const char *u = br_urlbar; int l = (int)strlen(u), maxc = (uw - 8) / 8; if (l > maxc - 1) u += l - (maxc - 1); int ex = text(ux + 6, w->y + 6, u, COL_TEXT); if (br_focus == -2) rect(ex, w->y + 20, 8, 2, COL_TEXT); }
+    clx0 = 0; clx1 = SW;
+    add_region(ux, w->y + 3, uw, 22, R_BURL, 0);
+    /* viewport */
+    rect(vx, vy - 2, vw, vh + 2, 0x0E131C);
+    clx0 = vx; cly0 = vy; clx1 = vx + vw; cly1 = vy + vh;
+    for (int i = 0; i < br_nitems(); i++) {
+        const struct bitem *it = br_item(i); int sx = vx + it->x, sy = vy + it->y - bscroll;
+        if (sy + it->h < vy || sy > vy + vh) continue;
+        switch (it->kind) {
+        case IT_TEXT: {
+            int sc = it->scale; char buf[96]; memcpy(buf, it->text, it->len); buf[it->len] = 0;
+            for (int k = 0; k < it->len; k++) { glyph(sx + k * 8 * sc, sy, (u8)buf[k], it->col, 0, 0, sc); if (it->bold) glyph(sx + k * 8 * sc + 1, sy, (u8)buf[k], it->col, 0, 0, sc); }
+            if (it->ul) rect(sx, sy + 15 * sc, it->w, 1, it->col);
+            if (it->link >= 0) add_clipped(sx, sy, it->w, it->h, vx, vy, vw, vh, R_BLINK, it->link);
+            break; }
+        case IT_RULE: rect(sx, sy, it->w, 1, 0x3A4660); break;
+        case IT_BULLET: rect(sx + 2, sy + 6, 5, 5, COL_ACC); break;
+        case IT_INPUT: {
+            const struct bfield *f = br_field(it->field); int foc = br_focus == it->field;
+            rect(sx, sy, it->w, it->h, 0x0B0F16); frame(sx, sy, it->w, it->h, foc ? COL_ACC : 0x4A5A78);
+            if (f->type == FT_CHECK) { if (f->checked) { text(sx + 4, sy, "x", COL_OK); } add_clipped(sx, sy, it->w, it->h, vx, vy, vw, vh, R_BCHK, it->field); break; }
+            { const char *v = f->value; int l = (int)strlen(v), maxc = (it->w - 8) / 8; if (l > maxc) v += l - maxc;
+              char tmp[72]; int n = (int)strlen(v); for (int k = 0; k < n && k < 70; k++) tmp[k] = f->type == FT_PASS ? '*' : v[k]; tmp[n < 70 ? n : 70] = 0;
+              int ex = text(sx + 4, sy + 2, tmp, COL_TEXT); if (foc) rect(ex, sy + 17, 8, 2, COL_TEXT); }
+            add_clipped(sx, sy, it->w, it->h, vx, vy, vw, vh, R_BFIELD, it->field);
+            break; }
+        case IT_BTN: {
+            const struct bfield *f = br_field(it->field);
+            rect(sx, sy, it->w, it->h, 0x2F5D9A); frame(sx, sy, it->w, it->h, 0x6CB6FF); textc(sx, sy + 2, it->w, f->value, COL_TEXT);
+            add_clipped(sx, sy, it->w, it->h, vx, vy, vw, vh, R_BSUB, it->field);
+            break; }
+        }
+    }
+    clx0 = 0; cly0 = 0; clx1 = SW; cly1 = SH;
+    /* scrollbar and status line */
+    int sbx = vx + vw; rect(sbx, vy - 2, 14, vh + 2, 0x141B27);
+    if (br_doc_height() > vh) { int th = vh * vh / br_doc_height(); if (th < 20) th = 20; int ty = vy + (vh - th) * bscroll / (maxs ? maxs : 1); rect(sbx + 2, ty, 10, th, 0x4A5A78); }
+    add_region(sbx, vy - 2, 14, (vh + 2) / 2, R_BSCRL, -1); add_region(sbx, vy - 2 + (vh + 2) / 2, 14, (vh + 2) / 2, R_BSCRL, 1);
+    rect(w->x, w->y + w->h - 20, w->w, 20, 0x141B27);
+    char st[160]; ksnprintf(st, sizeof st, "%s%s%s", br_loading() ? "loading... " : "", br_title()[0] ? br_title() : "", br_status()[0] ? (br_title()[0] ? "  -  " : "") : "");
+    text(w->x + 6, w->y + w->h - 18, st, COL_TEXT);
+    int sl = (int)strlen(st) * 8; text(w->x + 6 + sl, w->y + w->h - 18, br_status(), COL_DIM);
+}
+
+static void browser_scroll(int d) { bscroll += d; if (bscroll < 0) bscroll = 0; dirty = 1; }
+void gui_browse(const char *url)
+{
+    wins[W_BROWSER].visible = 1; raise_win(W_BROWSER); br_go(url, 1); bscroll = 0; dirty = 1;
+}
+int gui_active(void) { return gui_on; }
+
 /* ------------------------------------------------------------ desktop, panel, taskbar, cursor */
 static void render_wallpaper(void)
 {
@@ -235,7 +315,7 @@ static void draw_panel(void)
 static void draw_taskbar(void)
 {
     rect(0, SH - TASK_H, SW, TASK_H, 0x0B1018); rect(0, SH - TASK_H, SW, 1, 0x2C3B52);
-    static const char *names[NWIN] = { "Terminal", "Monitor", "Agents" };
+    static const char *names[NWIN] = { "Terminal", "Monitor", "Agents", "Browser" };
     int x = 10;
     for (int i = 0; i < NWIN; i++, x += 112) button(x, SH - TASK_H + 5, 104, 24, names[i], wins[i].visible ? (focus == i ? COL_TITLE : 0x25354D) : 0x161D29, R_TASK, i);
     button(x + 20, SH - TASK_H + 5, 120, 24, "AI Help (aih)", 0x5B3FA0, R_AIH, 0);
@@ -262,7 +342,7 @@ static void frame_draw(int mx, int my)
     for (int i = 0; i < NWIN; i++) {
         int id = zorder[i]; if (!wins[id].visible) continue;
         window_chrome(id);
-        if (id == W_TERM) draw_terminal(); else if (id == W_MON) draw_monitor(); else draw_agents();
+        if (id == W_TERM) draw_terminal(); else if (id == W_MON) draw_monitor(); else if (id == W_BROWSER) draw_browser(); else draw_agents();
     }
     draw_taskbar();
     draw_cursor(mx, my);
@@ -287,6 +367,13 @@ static void click(int mx, int my)
         case R_APPROVE: approval_decide(r->arg, 1); break;
         case R_DENY: approval_decide(r->arg, 0); break;
         case R_FREEZE: if (agent_is_frozen()) agent_thaw(); else agent_freeze(); break;
+        case R_BTOOL: if (r->arg == 0) br_back(); else if (r->arg == 1) br_forward(); else br_reload(); bscroll = 0; br_focus = -1; break;
+        case R_BURL: br_focus = -2; break;
+        case R_BLINK: br_follow(r->arg); bscroll = 0; break;
+        case R_BFIELD: br_focus = r->arg; break;
+        case R_BCHK: br_toggle(r->arg); break;
+        case R_BSUB: br_submit(r->arg); bscroll = 0; break;
+        case R_BSCRL: browser_scroll(r->arg * 120); break;
         case R_AIH: wins[W_TERM].visible = 1; raise_win(W_TERM); key_inject('a'); key_inject('i'); key_inject('h'); key_inject(' '); break;
         }
         dirty = 1;
@@ -303,6 +390,13 @@ static void gui_thread(void *arg)
         if (!t_enable->val) continue;
         int mx, my, mb, seq; mouse_state(&mx, &my, &mb, &seq);
         sample();
+        key_grab = wins[W_BROWSER].visible && focus == W_BROWSER;
+        if (key_grab) for (int k; (k = key_poll_raw()) >= 0; ) {
+            if (br_focus == -1) { if (k == K_DOWN) browser_scroll(32); else if (k == K_UP) browser_scroll(-32); else if (k == K_PGDN) browser_scroll(300); else if (k == K_PGUP) browser_scroll(-300); }
+            else if (k < 0x100) br_key(k);
+            dirty = 1;
+        }
+        if (br_tick()) dirty = 1;
         if (mb & 1) {
             if (!(lb & 1)) click(mx, my);
             else if (drag >= 0) {
@@ -347,4 +441,4 @@ void gui_init(void)
     gui_on = 1;
 }
 
-void gui_start(void) { if (gui_on) thread_create("gui", 6, gui_thread, NULL); }
+void gui_start(void) { if (gui_on) { br_init(); thread_create("gui", 6, gui_thread, NULL); } }

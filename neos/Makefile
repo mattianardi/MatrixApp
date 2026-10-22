@@ -66,8 +66,8 @@ $(BUILD)/linux/busybox: | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	cp /usr/bin/busybox $@
 
-$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) $(addprefix $(BUILD)/linux/,$(LINUX_BINS)) $(BUILD)/linux/busybox $(BUILD)/linux/nio $(BUILD)/linux/winrt $(addprefix $(BUILD)/win/,$(addsuffix .exe,$(WIN_EXES))) $(NIO_TESTS) tools/mkinitrd.py
-	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) $(foreach p,$(LINUX_BINS),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox bin/nio=$(BUILD)/linux/nio bin/winrt=$(BUILD)/linux/winrt $(foreach w,$(WIN_EXES),bin/$(w).exe=$(BUILD)/win/$(w).exe) $(foreach f,$(NIO_TESTS),lib/nio/tests/$(notdir $(f))=$(f)) etc/motd=README.md
+$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) $(addprefix $(BUILD)/linux/,$(LINUX_BINS)) $(BUILD)/linux/busybox $(BUILD)/linux/nio $(BUILD)/linux/winrt $(addprefix $(BUILD)/win/,$(addsuffix .exe,$(WIN_EXES))) $(NIO_TESTS) $(wildcard webapps/*) tools/mkinitrd.py
+	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) $(foreach p,$(LINUX_BINS),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox bin/nio=$(BUILD)/linux/nio bin/winrt=$(BUILD)/linux/winrt $(foreach w,$(WIN_EXES),bin/$(w).exe=$(BUILD)/win/$(w).exe) $(foreach f,$(NIO_TESTS),lib/nio/tests/$(notdir $(f))=$(f)) $(foreach f,$(wildcard webapps/*),www/$(notdir $(f))=$(f)) etc/motd=README.md
 
 $(BUILD)/%.o: kernel/%.asm | $(BUILD)
 	$(NASM) -f elf64 $< -o $@
@@ -105,6 +105,7 @@ test: all
 	@$(MAKE) --no-print-directory aihtest
 	@$(MAKE) --no-print-directory agenttest
 	@$(MAKE) --no-print-directory guitest
+	@$(MAKE) --no-print-directory browsertest
 	@$(MAKE) --no-print-directory disktest
 
 shelltest: all
@@ -128,6 +129,9 @@ niotest: all
 aihtest: all
 	@python3 tools/check-aih.py | tail -1
 
+browsertest: all
+	@python3 tools/check-browser.py | tail -1
+
 disktest: all
 	@tools/check-disk.sh
 
@@ -140,4 +144,4 @@ agenttest: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest disktest clean
+.PHONY: all run test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest disktest clean

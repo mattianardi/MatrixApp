@@ -3,7 +3,6 @@
 #include "shell.h"
 #include "vfs.h"
 
-static const char *strstr(const char *h, const char *n) { for (; *h; h++) { size_t i = 0; while (n[i] && h[i] == n[i]) i++; if (!n[i]) return h; } return 0; }
 
 /*
  * Package manager. Repository layout (see tools/mkrepo.py):

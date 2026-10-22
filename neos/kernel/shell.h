@@ -5,7 +5,11 @@
 enum { K_UP = 0x100, K_DOWN, K_LEFT, K_RIGHT, K_HOME, K_END, K_DEL, K_PGUP, K_PGDN };
 void input_init(void);
 int  key_poll(void);
-void key_inject(int c);             /* queue a key as if typed (GUI buttons) */
+int  key_poll_raw(void);
+extern volatile int key_grab;
+void key_inject(int c);
+void gui_browse(const char *url);
+int  gui_active(void);             /* queue a key as if typed (GUI buttons) */
 void mouse_state(int *x, int *y, int *btn, int *seq);
 void mouse_bounds(int w, int h);
 int  ui_cpu_pct(void);

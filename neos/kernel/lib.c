@@ -160,3 +160,23 @@ int b64_decode(const char *in, void *out, size_t on)
     }
     return (int)n;
 }
+
+int strncasecmp(const char *a, const char *b, size_t n)
+{
+    for (; n; n--, a++, b++) {
+        int x = to_lower((u8)*a), y = to_lower((u8)*b);
+        if (x != y) return x - y;
+        if (!x) return 0;
+    }
+    return 0;
+}
+
+char *strstr(const char *h, const char *n)
+{
+    size_t nl = strlen(n);
+    if (!nl) return (char *)h;
+    for (; *h; h++) if (*h == *n && !strncmp(h, n, nl)) return (char *)h;
+    return NULL;
+}
+char *strrchr(const char *s, int c) { const char *r = NULL; for (;; s++) { if (*s == (char)c) r = s; if (!*s) break; } return (char *)r; }
+char *strcpy(char *d, const char *s) { char *r = d; while ((*d++ = *s++)) { } return r; }

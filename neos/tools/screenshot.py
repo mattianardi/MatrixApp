@@ -17,7 +17,7 @@ class Session:
         self.mon = os.path.join(self.dir, 'mon.sock')
         os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
         self.p = subprocess.Popen(['qemu-system-x86_64', '-kernel', 'build/matrix32.elf', '-initrd', 'build/initrd.npk', '-m', '512', '-display', 'none',
-            '-cpu', 'max', '-serial', 'stdio', '-no-reboot', '-vga', 'std', '-monitor', f'unix:{self.mon},server,nowait'],
+            '-cpu', 'max', '-serial', 'stdio', '-no-reboot', '-vga', 'std', '-nic', 'user,model=e1000', '-monitor', f'unix:{self.mon},server,nowait'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         time.sleep(boot)
         self.m = socket.socket(socket.AF_UNIX); self.m.connect(self.mon); time.sleep(0.3); self.m.recv(65536)

@@ -431,3 +431,11 @@ int c_disk(int argc, char **argv, struct ctx *c)
     kprintf("usage: disk [status|sync|format]\n");
     return -1;
 }
+
+int c_browse(int argc, char **argv, struct ctx *c)
+{
+    (void)c;
+    if (!gui_active()) { kprintf("\x1b[91mbrowse: the graphical workspace is not running\x1b[0m\n"); return -1; }
+    gui_browse(argc > 1 ? argv[1] : "neos://home");
+    return 0;
+}
