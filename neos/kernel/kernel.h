@@ -20,6 +20,16 @@ struct frame {
     u64 rip, cs, rflags, rsp, ss;
 };
 
+/* ---- address space layout ---- */
+#define KERNEL_VMA 0xFFFFFFFF80000000ull      /* kernel image: virt = phys + KERNEL_VMA */
+#define PHYSMAP    0xFFFF800000000000ull      /* all RAM and MMIO: virt = phys + PHYSMAP */
+static inline void *P2V(u64 phys) { return (void *)(phys + PHYSMAP); }
+static inline u64 V2P(const void *v)
+{
+    u64 a = (u64)v;
+    return a >= KERNEL_VMA ? a - KERNEL_VMA : a - PHYSMAP;
+}
+
 /* ---- port I/O, interrupt flag ---- */
 static inline void outb(u16 p, u8 v)  { __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(p)); }
 static inline u8   inb(u16 p)         { u8 v; __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(p)); return v; }

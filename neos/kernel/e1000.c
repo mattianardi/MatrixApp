@@ -37,7 +37,7 @@ int e1000_init(void)
     pci_write(d.bus, d.dev, d.fn, 4, cmd | 0x7);                 /* I/O, memory, bus master */
     u32 bar = pci_read(d.bus, d.dev, d.fn, 0x10) & ~0xFu;
     if (!bar) return -1;
-    mmio = (volatile u8 *)(u64)bar;
+    mmio = (volatile u8 *)P2V(bar);
 
     wr(IMC, 0xFFFFFFFF);
     wr(CTRL, rd(CTRL) | (1u << 26));                             /* reset */
@@ -54,10 +54,10 @@ int e1000_init(void)
 
     u64 rp = pmm_alloc(1), tp = pmm_alloc(1), rb = pmm_alloc(RXN * BUFSZ / 4096), tb = pmm_alloc(TXN * BUFSZ / 4096);
     if (!rp || !tp || !rb || !tb) return -1;
-    rx = (struct rxd *)rp; tx = (struct txd *)tp; rxbuf = (u8 *)rb; txbuf = (u8 *)tb;
+    rx = P2V(rp); tx = P2V(tp); rxbuf = P2V(rb); txbuf = P2V(tb);
     memset(rx, 0, 4096); memset(tx, 0, 4096);
-    for (int i = 0; i < RXN; i++) rx[i].addr = (u64)(rxbuf + i * BUFSZ);
-    for (int i = 0; i < TXN; i++) { tx[i].addr = (u64)(txbuf + i * BUFSZ); tx[i].status = 1; }
+    for (int i = 0; i < RXN; i++) rx[i].addr = rb + (u64)i * BUFSZ;
+    for (int i = 0; i < TXN; i++) { tx[i].addr = tb + (u64)i * BUFSZ; tx[i].status = 1; }
 
     wr(RDBAL, (u32)rp); wr(RDBAH, (u32)(rp >> 32)); wr(RDLEN, RXN * 16); wr(RDH, 0); wr(RDT, RXN - 1);
     wr(RCTL, (1u << 1) | (1u << 15) | (1u << 26));               /* enable, accept broadcast, strip CRC, 2 KiB buffers */

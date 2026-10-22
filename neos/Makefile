@@ -3,7 +3,7 @@ LD      := ld
 NASM    := nasm
 BUILD   := build
 CFLAGS  := -std=gnu11 -O2 -Wall -Wextra -ffreestanding -fno-pic -fno-pie \
-           -fno-stack-protector -mno-red-zone -mgeneral-regs-only -Ikernel
+           -fno-stack-protector -mcmodel=kernel -mno-red-zone -mgeneral-regs-only -Ikernel
 LDFLAGS := -T kernel/linker.ld -nostdlib -static -z max-page-size=0x1000
 
 CSRC := $(wildcard kernel/*.c)

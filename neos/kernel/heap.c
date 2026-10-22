@@ -20,7 +20,7 @@ void heap_init(void)
     size_t pages = (size_t)t_mb->val * 256;
     u64 a = pmm_alloc(pages);
     if (!a) panic("cannot allocate %lu MiB kernel heap", (u64)t_mb->val);
-    bump = (u8 *)a; arena_end = bump + pages * 4096; total = pages * 4096;
+    bump = P2V(a); arena_end = bump + pages * 4096; total = pages * 4096;
 }
 
 static int class_of(size_t n) { int k = 0; size_t s = 16; while (s < n) { s <<= 1; k++; } return k; }

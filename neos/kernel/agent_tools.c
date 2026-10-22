@@ -554,8 +554,8 @@ static int t_peek(struct agent *a, int argc, char **argv, struct jbuf *o)
     (void)a; (void)argc;
     i64 addr, len; num(argv[1], &addr); num(argv[2], &len);
     char enc[200];
-    b64_encode((const void *)addr, (size_t)len, enc, sizeof enc);
-    jp(o, "{\"addr\":\"0x%lx\",\"len\":%ld,\"data_b64\":\"%s\"}", addr, len, enc);
+    b64_encode(P2V((u64)addr), (size_t)len, enc, sizeof enc);
+    jp(o, "{\"phys_addr\":\"0x%lx\",\"len\":%ld,\"data_b64\":\"%s\"}", addr, len, enc);
     return 0;
 }
 

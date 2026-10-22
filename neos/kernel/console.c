@@ -16,7 +16,7 @@ static volatile u64 dropped;
 static int async;
 static struct tunable *t_serial, *t_vga, *t_batch, *t_color;
 
-static u16 *const vga = (u16 *)0xB8000;
+#define vga ((u16 *)P2V(0xB8000))
 static int vtop, vrow, vcol;
 static u8 vattr = 0x07;
 static int esc, esc_n, esc_have;

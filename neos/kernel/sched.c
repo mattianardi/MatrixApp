@@ -60,7 +60,7 @@ int thread_create(const char *name, u8 prio, thread_fn fn, void *arg)
     u32 pages = (u32)t_stack->val;
     u64 stack = pmm_alloc(pages);
     if (!stack) { t->state = UNUSED; irq_restore(fl); return -1; }
-    u64 top = stack + (u64)pages * 4096;
+    u64 top = (u64)P2V(stack) + (u64)pages * 4096;
     *(u64 *)(top - 8) = (u64)thread_exit;                   /* return address of fn */
     struct frame *f = (struct frame *)(top - 8 - sizeof *f);
     memset(f, 0, sizeof *f);

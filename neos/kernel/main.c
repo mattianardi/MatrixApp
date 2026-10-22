@@ -56,13 +56,14 @@ static void init_thread(void *arg)
     } else if (net_nic_present()) net_start();
 }
 
-void kmain(u32 magic, const void *mbi)
+void kmain(u32 magic, u64 mbi_phys)
 {
+    const void *mbi = P2V(mbi_phys);
     console_init();                       /* synchronous until console_async_start() */
     if (magic != 0x2BADB002) panic("bad multiboot magic %x", magic);
 
     const u32 *mb = mbi;
-    if (mb[0] & (1 << 2)) tune_bootargs((const char *)(u64)mb[4]);      /* kernel command line */
+    if (mb[0] & (1 << 2)) tune_bootargs((const char *)P2V(mb[4]));      /* kernel command line */
     module_register("kernel", NEOS_VERSION, "boot, interrupts, API");
     t_test = tune_bool("boot", "test", "run the RT self-test and exit QEMU (CI)", TF_BOOT, 0, NULL);
 

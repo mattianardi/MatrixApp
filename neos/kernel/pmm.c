@@ -3,7 +3,7 @@
 #define PAGE 4096
 #define MAX_PAGES (1u << 18)            /* 1 GiB, what boot.asm identity-maps */
 
-extern char _kernel_end[];
+extern char _kernel_end[];     /* virtual (higher half) */
 static u32 bitmap[MAX_PAGES / 32];      /* 1 = used */
 static size_t free_count, total_count;
 
@@ -25,10 +25,10 @@ void pmm_init(const void *mbi)
 
     const u32 *info = mbi;
     if (!(info[0] & (1 << 6))) panic("bootloader gave no memory map");
-    u64 start = ((u64)_kernel_end + PAGE - 1) & ~(u64)(PAGE - 1);
+    u64 start = ((V2P(_kernel_end)) + PAGE - 1) & ~(u64)(PAGE - 1);
     if (start < 0x200000) start = 0x200000;
 
-    const u8 *p = (const u8 *)(u64)info[12], *end = p + info[11];
+    const u8 *p = P2V(info[12]), *end = p + info[11];
     while (p < end) {
         const struct mmap_entry *e = (const void *)p;
         if (e->type == 1) {
