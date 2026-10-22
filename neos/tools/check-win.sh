@@ -6,9 +6,10 @@ out=$(NEOS_BOOT_WAIT=10 NEOS_STEP=5 NEOS_TIMEOUT=200 tools/shell-session.sh \
   'cat /mnt/c/shared/win.txt' \
   'cat /mnt/c/shared/crt.txt' \
   'run /bin/wincoop.exe' \
-  'type C:\shared\win.txt' \
   'run /bin/busybox sh -c "echo made-by-linux > /mnt/c/shared/lin.txt"' \
-  'run /bin/wintest.exe')
+  'set NEOS_X=C:\data\x' \
+  'run /bin/wintest.exe' \
+  "run /bin/busybox sh -c 'echo lin=\$NEOS_X'")
 fail=0
 check() { printf '%s\n' "$out" | grep -qF -- "$1" || { echo "MISSING: $1"; fail=1; }; }
 check 'WIN argc=3 argv0=\\neos\root\bin\wintest.exe'
@@ -18,6 +19,8 @@ check 'WIN read 13: from-windows'
 check 'WIN threads counter=4 exit=7 tls=5'
 check 'WIN found 2 txt files'
 check 'WIN done'
+check 'WIN env NEOS_X=C:\data\x'
+check 'lin=/mnt/c/data/x'
 check 'exited with code 3'
 check 'from-windows'
 check 'crt line 9'

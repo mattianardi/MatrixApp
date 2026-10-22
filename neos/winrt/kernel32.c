@@ -711,6 +711,7 @@ static BOOL create_process(LPCSTR app, LPSTR cmd, void *si, void *pi)
             if ((o = H(hout)) && o->type == O_FILE) dup2(o->fd, 1);
             if ((o = H(herr)) && o->type == O_FILE) dup2(o->fd, 2);
         }
+        for (int fd = 3; fd < 256; fd++) close(fd);                                /* only the standard handles are inherited */
         argv[0] = path;
         execv(path, argv);
         _exit(127);
