@@ -73,6 +73,25 @@ static int mouse_init(void)
     return 0;
 }
 
+/* ---- sinks for USB HID drivers ---- */
+static int ukeys[32]; static volatile u8 ukh, ukt;
+void input_push_key(int ch)
+{
+    if (ch == 0x1C) { agents_frozen = 1; return; }                    /* Ctrl+\ */
+    u8 n = (ukh + 1) & 31; if (n != ukt) { ukeys[ukh] = ch; ukh = n; }
+}
+void input_mouse_rel(int dx, int dy, int btn)
+{
+    int x = m_x + dx, y = m_y + dy;
+    m_x = x < 0 ? 0 : x >= m_w ? m_w - 1 : x;
+    m_y = y < 0 ? 0 : y >= m_h ? m_h - 1 : y;
+    m_btn = btn & 7; m_seq++;
+}
+void input_mouse_abs(int x, int y, int max, int btn)
+{
+    m_x = x * (m_w - 1) / max; m_y = y * (m_h - 1) / max; m_btn = btn & 7; m_seq++;
+}
+
 void mouse_state(int *x, int *y, int *btn, int *seq) { *x = m_x; *y = m_y; *btn = m_btn; *seq = m_seq; }
 void mouse_bounds(int w, int h) { m_w = w; m_h = h; if (m_x >= w) m_x = w - 1; if (m_y >= h) m_y = h - 1; }
 void key_inject(int c) { u8 n = (kih + 1) & 15; if (n != kit) { kinject[kih] = c; kih = n; } }
@@ -82,6 +101,8 @@ void input_init(void)
     module_register("input", "1.0", "PS/2 keyboard (IRQ1) + serial console input");
     t_poll = tune_int("input", "poll_ms", "shell input polling interval (ms)", TF_LIVE, 2, 1, 100, NULL);
     while (inb(0x64) & 1) inb(0x60);
+    struct tunable *t_ps2 = tune_bool("input", "ps2", "use the PS/2 keyboard and mouse (off: USB devices only)", TF_BOOT, 1, NULL);
+    if (!t_ps2->val) return;
     irq_register(1, ps2_irq);
     if (!mouse_init()) { module_register("mouse", "1.0", "PS/2 mouse (IRQ12)"); irq_register(12, ps2_irq); }
 }
@@ -113,6 +134,7 @@ static int from_serial(void)
 
 static int from_ps2(void)
 {
+    if (ukt != ukh) { int c = ukeys[ukt]; ukt = (ukt + 1) & 31; return c; }
     while (rt != rh) {
         u8 sc = ring[rt]; rt = (rt + 1) & 127;
         if (sc == 0xE0) { e0 = 1; continue; }

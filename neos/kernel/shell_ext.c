@@ -185,6 +185,7 @@ int c_pwd(int argc, char **argv, struct ctx *c)
 static int fg_pid;
 static int ctrl_c(void);
 #include "proc.h"
+#include "usb.h"
 /* Package backends live in /lib/neos/pkg/<name>.sh (shipped in the initrd): `pkg install pip:requests`, `deb:<file|url>`, `tar:<url>`, `apt:<name>`.
  * They run as ordinary Linux programs; the registry (/var/pkg, /opt, PATH) stays the one place that says what is installed. */
 static int run_backend(const char *backend, const char *sub, const char *spec)
@@ -505,5 +506,25 @@ int c_dpkg(int argc, char **argv, struct ctx *c)
     if (argc >= 3 && (!strcmp(argv[1], "-i") || !strcmp(argv[1], "--install"))) return run_backend("deb", "install", argv[2]);
     if (argc >= 3 && (!strcmp(argv[1], "-r") || !strcmp(argv[1], "--remove"))) return run_backend("deb", "remove", argv[2]);
     err("usage: dpkg -i <file.deb> | dpkg -r <name>");
+    return -1;
+}
+
+int c_usb(int argc, char **argv, struct ctx *c)
+{
+    const char *sub = argc > 1 ? argv[1] : "list", *e = "";
+    if (!strcmp(sub, "list")) {
+        tb_init(c->tb, "#", "port", "device", "class", NULL);
+        if (!usb_present()) return 0;
+        for (int i = 0; i < usb_count(); i++) {
+            const struct usb_dev *d = usb_get(i); if (!d || tb_newrow(c->tb) < 0) continue;
+            tb_set(c->tb, 0, "%d", i); tb_set(c->tb, 1, "%d", d->port); tb_set(c->tb, 2, "%s", d->name); tb_set(c->tb, 3, "%02x", d->cls);
+        }
+        return 0;
+    }
+    if (c->pure) return -1;
+    if (!strcmp(sub, "mount")) { if (fat_mount("/mnt/usb", &e)) { kprintf("\x1b[91musb: %s\x1b[0m\n", e); return -1; } return 0; }
+    if (!strcmp(sub, "sync")) { if (fat_sync(&e)) { kprintf("\x1b[91musb: %s\x1b[0m\n", e); return -1; } return 0; }
+    if (!strcmp(sub, "umount")) { if (fat_sync(&e)) { kprintf("\x1b[91musb: %s\x1b[0m\n", e); return -1; } fat_umount(); kprintf("/mnt/usb unmounted: it is safe to remove the stick\n"); return 0; }
+    err("usage: usb [list | mount | sync | umount]");
     return -1;
 }

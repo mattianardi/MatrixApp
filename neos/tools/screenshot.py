@@ -12,12 +12,12 @@ def ppm_to_png(ppm, png):
     return w, h, pix
 
 class Session:
-    def __init__(self, boot=14, initrd='build/initrd.npk'):
+    def __init__(self, boot=14, initrd='build/initrd.npk', extra=None, kargs=''):
         self.dir = tempfile.mkdtemp()
         self.mon = os.path.join(self.dir, 'mon.sock')
         os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
         self.p = subprocess.Popen(['qemu-system-x86_64', '-kernel', 'build/matrix32.elf', '-initrd', initrd, '-m', '512', '-display', 'none',
-            '-cpu', 'max', '-serial', 'stdio', '-no-reboot', '-vga', 'std', '-nic', 'user,model=e1000', '-monitor', f'unix:{self.mon},server,nowait'],
+            '-cpu', 'max', '-serial', 'stdio', '-no-reboot', '-vga', 'std', '-nic', 'user,model=e1000', '-monitor', f'unix:{self.mon},server,nowait', '-append', kargs] + (extra or []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.out = ''
         threading.Thread(target=self._reader, daemon=True).start()

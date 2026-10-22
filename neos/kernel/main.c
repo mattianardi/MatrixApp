@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "usb.h"
 #include "shell.h"
 #include "varbus.h"
 #include "net.h"
@@ -98,6 +99,8 @@ static void init_thread(void *arg)
     if (t_test->val) { int rc = selftest_run(); qemu_exit(rc ? 0x11 : 0x10); }
     agentd_start();
     neofs_start();
+    usb_init();
+    usb_start();
     shell_start();
     ui_start();
     gui_start();
