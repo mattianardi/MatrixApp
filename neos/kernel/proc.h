@@ -21,6 +21,9 @@ struct proc {
     int world;                     /* NEOS_VIEW_LINUX / NEOS_VIEW_WINDOWS: which convention its environment uses */
     int nthreads, main_tid, next_utid;
     struct sigact sig[65];
+    u64 sigpending, sigmask;       /* Linux signals: pending set and blocked set (process-wide) */
+    u64 susp_mask; int susp;       /* sigsuspend: the mask to restore when the handler returns */
+    u64 alarm_at, alarm_int;       /* ITIMER_REAL deadline and period in ticks */
 };
 
 struct spawn_opts { int world, prio, ngrant; const char *grant[8]; };    /* grants: "cap" or "cap:scope", applied before the program runs */
@@ -34,6 +37,16 @@ int  proc_kill(int pid, i64 code);                 /* shell convention: terminat
 int  proc_signal(int pid, int sig);                /* Linux kill(2) semantics (default actions only) */
 int  proc_wait(int pid, i64 *code, int (*interrupt)(void));     /* shell: blocks until the process ends */
 struct frame *proc_fault(struct frame *f);
+/* signal.c */
+extern volatile int sig_any;
+int  sig_post(struct proc *p, int sig);
+int  sig_interrupted(struct proc *p);
+struct frame *signal_deliver(struct frame *f);
+struct frame *signal_fault(struct frame *f, int sig, u64 addr, int code);   /* NULL = no handler: the caller kills the process */
+long sig_return(struct proc *p, struct frame *f);
+void alarm_set(struct proc *p, u64 deadline, u64 interval);
+void alarm_tick(void);
+void proc_kill_signal(struct proc *p, int sig);
 struct frame *user_syscall(struct frame *f);       /* native NEOS ABI (int 0x80) */
 struct frame *linux_syscall(struct frame *f);      /* Linux x86-64 ABI (syscall instruction) */
 

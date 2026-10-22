@@ -176,7 +176,7 @@ persistenza su disco, workspace grafico e browser.
 |---|---|
 | TLS / HTTPS / firme dei pacchetti | non c'è: HTTP + SHA-256 + pin dell'indice |
 | Rete per programmi Linux | socket IPv4 TCP/UDP (client e server, loopback), `epoll`, `eventfd`, `getaddrinfo` (`/etc/hosts`, `/etc/resolv.conf`); niente IPv6, socket Unix, raw socket |
-| Gestori di segnale (`sigaction`) per processi Linux | non consegnati: valgono le azioni predefinite |
+| Segnali Linux | `sigaction`/`sigprocmask`/`sigsuspend`/`alarm`/`setitimer`, SIGCHLD, SIGSEGV recuperabile (`siglongjmp`), stato FPU preservato; maschera per processo (non per thread), niente `sigaltstack` né segnali in tempo reale con coda |
 | Windows: solo PE64 con API Win32 di base | niente GUI Win32, DirectX, servizi, registro completo, PE a 32 bit |
 | Browser: niente JavaScript/CSS/HTTPS | le web-app moderne con JS non funzionano |
 | SMP/APIC (un solo core), tickless, priority inheritance | da fare |

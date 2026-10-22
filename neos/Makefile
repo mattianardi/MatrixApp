@@ -19,7 +19,7 @@ QEMU = qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -initrd $(BUILD)/initrd.
 USER_CFLAGS := -O2 -Wall -ffreestanding -fno-stack-protector -nostdlib -static -mno-avx -fno-asynchronous-unwind-tables \
                -Wl,--build-id=none -Wl,-z,max-page-size=4096
 USER_PROGS  := hello hello-pie crash spin
-LINUX_BINS  := hello_glibc fileio forkpipe threads hello_musl hello_rs hello_go netcheck webserver
+LINUX_BINS  := hello_glibc fileio forkpipe threads hello_musl hello_rs hello_go netcheck webserver sigtest
 LINUX_CC    := gcc -O2 -static -fno-pie -no-pie
 
 all: $(BUILD)/matrix32.elf $(BUILD)/initrd.npk

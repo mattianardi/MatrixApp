@@ -279,7 +279,11 @@ static long sys_nanosleep(struct proc *p, u64 ureq, u64 urem)
     u64 ts[2];
     if (copy_from_user(&p->as, ts, ureq, 16)) return -E_FAULT;
     u64 ns = ts[0] * 1000000000ull + ts[1];
-    thread_sleep_ms((ns + 999999) / 1000000);
+    u64 ms = (ns + 999999) / 1000000, until = ticks + ms_to_ticks(ms);
+    while (ticks < until) {
+        if (sig_interrupted(p)) { u64 left = (until - ticks) * 1000000000ull / timer_hz(); if (urem) { u64 r[2] = { left / 1000000000ull, left % 1000000000ull }; copy_to_user(&p->as, urem, r, 16); } return -E_INTR; }
+        thread_sleep_ms(ms > 4 ? 4 : ms ? ms : 1);
+    }
     if (urem) { u64 z[2] = { 0, 0 }; copy_to_user(&p->as, urem, z, 16); }
     return 0;
 }
@@ -320,6 +324,7 @@ static long sys_poll(struct proc *p, u64 ufds, u64 nfds, long timeout_ms)
             copy_to_user(&p->as, ufds + i * 8, &pf, 8);
         }
         if (ready || timeout_ms == 0 || (deadline != ~0ull && ticks >= deadline)) return ready;
+        if (sig_interrupted(p)) return -E_INTR;
         extern int tty_pump(void);
         tty_pump();
         thread_sleep_ms(2);
@@ -542,6 +547,7 @@ static long sys_epoll_wait(struct proc *p, int epfd, u64 uev, int max, long time
         int n = epoll_collect(ep, p->fds, ev, max);
         if (n) return copy_to_user(&p->as, uev, ev, (size_t)n * sizeof(struct epoll_ev)) ? -E_FAULT : n;
         if (timeout_ms == 0 || (deadline != ~0ull && ticks >= deadline)) return 0;
+        if (sig_interrupted(p)) return -E_INTR;
         extern int tty_pump(void);
         tty_pump();
         thread_sleep_ms(1);
@@ -631,7 +637,6 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 51: case 52: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 lip, rip; u16 lp, rp; sock_names(sk, &lip, &lp, &rip, &rp); if (nr == 52 && !rp) RET(-107); RET(nr == 51 ? put_sockaddr(p, a1, a2, lip, lp) : put_sockaddr(p, a1, a2, rip, rp)); }
     case 54: RET(sys_sockopt(p, (int)a0, (int)a1, (int)a2, a3, a4, 0));
     case 55: RET(sys_sockopt(p, (int)a0, (int)a1, (int)a2, a3, a4, 1));
-    case 37: RET(0);                                                      /* alarm: no SIGALRM delivery yet */
     case 53: RET(-97);                                                    /* socketpair: AF_UNIX is not supported */
     case 213: case 291: { struct file *ef = file_new(FT_EPOLL, 2); if (!ef) RET(-E_NOMEM); ef->ep = kmalloc(1024); if (!ef->ep) { kfree(ef); RET(-E_NOMEM); } memset(ef->ep, 0, 1024); r = fdt_install(p->fds, ef, 0, nr == 291 && (a0 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }
     case 233: { struct file *ef = fdt_get(p->fds, (int)a0); if (!ef || ef->type != FT_EPOLL) RET(-E_BADF); struct epoll_ev ev = { 0, 0 }; if (a1 != 2 && copy_from_user(&p->as, &ev, a3, sizeof ev)) RET(-E_FAULT); RET(epoll_ctl_op(ef, p->fds, (int)a1, (int)a2, ev.events, ev.data)); }
@@ -651,9 +656,39 @@ static struct frame *linux_syscall_impl(struct frame *f)
         if (a1) { u64 nw[4]; if (copy_from_user(&p->as, nw, a1, 32)) RET(-E_FAULT); p->sig[a0] = (struct sigact){ nw[0], nw[1], nw[3], nw[2] }; }
         RET(0);
     }
-    case 14: { if (a2) { u64 z = 0; copy_to_user(&p->as, a2, &z, 8); } RET(0); }       /* rt_sigprocmask */
-    case 131: case 130: case 127: RET(0);                                 /* sigaltstack, sigsuspend, sigpending */
-    case 15: RET(-E_INVAL);                                               /* rt_sigreturn: handlers are not delivered yet */
+    case 14: {                                                            /* rt_sigprocmask(how, set, oldset, sigsetsize) */
+        u64 old = p->sigmask;
+        if (a2 && copy_to_user(&p->as, a2, &old, 8)) RET(-E_FAULT);
+        if (a1) {
+            u64 set; if (copy_from_user(&p->as, &set, a1, 8)) RET(-E_FAULT);
+            set &= ~((1ull << 8) | (1ull << 18));                         /* SIGKILL, SIGSTOP can never be blocked */
+            if (a0 == 0) p->sigmask |= set; else if (a0 == 1) p->sigmask &= ~set; else if (a0 == 2) p->sigmask = set; else RET(-E_INVAL);
+            if (p->sigpending & ~p->sigmask) sig_any = 1;
+        }
+        RET(0);
+    }
+    case 131: RET(0);                                                     /* sigaltstack: handlers run on the thread's own stack */
+    case 127: { u64 pend = p->sigpending & p->sigmask; if (a0 && copy_to_user(&p->as, a0, &pend, 8)) RET(-E_FAULT); RET(0); }
+    case 130: {                                                           /* rt_sigsuspend: swap the mask, wait for a signal, EINTR */
+        u64 set; if (copy_from_user(&p->as, &set, a0, 8)) RET(-E_FAULT);
+        p->susp_mask = p->sigmask; p->susp = 1;
+        p->sigmask = set & ~((1ull << 8) | (1ull << 18));
+        if (p->sigpending & ~p->sigmask) sig_any = 1;
+        while (!sig_interrupted(p)) thread_sleep_ms(2);
+        RET(-E_INTR);
+    }
+    case 15: { long sr = sig_return(p, f); if (sr) RET(sr); return f; }   /* rt_sigreturn: the frame was restored from the user's ucontext */
+    case 37: { u64 rem = 0; if (p->alarm_at > ticks) rem = (p->alarm_at - ticks) * 1000 / timer_hz() / 1000 + 1; alarm_set(p, a0 ? ticks + a0 * timer_hz() : 0, 0); RET(rem); }
+    case 38: {                                                            /* setitimer(which, new, old): ITIMER_REAL only */
+        if (a0 != 0) RET(0);
+        if (a2) { u64 o[4] = { 0, 0, 0, 0 }; if (p->alarm_at > ticks) { u64 us = (p->alarm_at - ticks) * 1000000ull / timer_hz(); o[2] = us / 1000000; o[3] = us % 1000000; } if (p->alarm_int) { u64 us = p->alarm_int * 1000000ull / timer_hz(); o[0] = us / 1000000; o[1] = us % 1000000; } copy_to_user(&p->as, a2, o, 32); }
+        if (a1) { u64 n[4]; if (copy_from_user(&p->as, n, a1, 32)) RET(-E_FAULT);
+            u64 val = n[2] * timer_hz() + n[3] * timer_hz() / 1000000, per = n[0] * timer_hz() + n[1] * timer_hz() / 1000000;
+            if ((n[2] || n[3]) && !val) val = 1; if ((n[0] || n[1]) && !per) per = 1;
+            alarm_set(p, val ? ticks + val : 0, per); }
+        RET(0);
+    }
+    case 36: { if (a0 == 0 && a1) { u64 o[4] = { 0, 0, 0, 0 }; if (p->alarm_at > ticks) { u64 us = (p->alarm_at - ticks) * 1000000ull / timer_hz(); o[2] = us / 1000000; o[3] = us % 1000000; } copy_to_user(&p->as, a1, o, 32); } RET(0); }
     case 16: RET(sys_ioctl(p, (int)a0, a1, a2));
     case 21: case 269: case 439: { if ((r = nr == 21 ? get_path(p, a0, abs, sizeof abs) : path_at(p, (long)a0, a1, abs, sizeof abs))) RET(r); RET(vfs_lookup(abs) ? 0 : -E_NOENT); }
     case 22: case 293: {
@@ -767,7 +802,7 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 202: RET(sys_futex(p, a0, (int)a1, (u32)a2, a3, a4, (u32)a5));
     case 204: { u64 m = 1; if (a2 && a1 >= 8 && copy_to_user(&p->as, a2, &m, 8)) RET(-E_FAULT); RET(8); }
     case 203: RET(0);
-    case 200: case 234: if (a1 == 0 || (nr == 234 && a2 == 0)) RET(0); RET(0);                  /* thread-directed signals are not delivered yet */
+    case 200: case 234: { int sg = (int)(nr == 200 ? a1 : a2); if (sg == 23 || sg == 0) RET(0); RET(proc_signal(p->pid, sg)); }   /* tkill/tgkill: delivered to the process (SIGURG, Go's preemption nudge, is dropped) */
     case 62: {
         long pid = (long)a0;
         if (pid > 0) {

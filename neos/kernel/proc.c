@@ -60,6 +60,7 @@ static void finish(struct proc *p, int wstatus, i64 shell_code)
     struct proc *par = p->ppid ? proc_by_pid(p->ppid) : NULL;
     irq_restore(fl);
     if (fds) fdt_release(fds);
+    if (par && par->sig[17].handler > 1) sig_post(par, 17);                  /* SIGCHLD, only when the parent asked for it */
     if (par) wake_on(par, 16);
     wake_on(&procs, 16);                                        /* shell-side proc_wait */
 }
@@ -346,7 +347,8 @@ int proc_execve(struct proc *p, struct frame *f, const char *path, struct argblo
     sched_switch_cr3(p->as.pml4);
     if (old) { vm_free(old); kfree(old); }
     fdt_close_cloexec(p->fds);
-    memset(p->sig, 0, sizeof p->sig);
+    for (int i = 1; i <= 64; i++) if (p->sig[i].handler != 1) memset(&p->sig[i], 0, sizeof p->sig[i]);    /* exec: caught signals revert to default, ignored stay ignored */
+    p->sigpending = 0; p->alarm_at = 0;
     sched_set_fsbase(0); sched_set_gsbase(0);
     uctx_current()->clear_tid = 0;
     p->entry = entry; p->brk_start = p->brk = brk0; p->mmap_next = MMAP_BASE;
@@ -377,7 +379,7 @@ long proc_fork(struct proc *p, const struct frame *f, u64 child_stack)
     c->ppid = p->pid; c->world = p->world; c->start_tick = ticks;
     strlcpy(c->name, p->name, sizeof c->name); strlcpy(c->exe, p->exe, sizeof c->exe); strlcpy(c->cwd, p->cwd, sizeof c->cwd);
     c->brk_start = p->brk_start; c->brk = p->brk; c->mmap_next = p->mmap_next; c->entry = p->entry;
-    memcpy(c->sig, p->sig, sizeof c->sig);
+    memcpy(c->sig, p->sig, sizeof c->sig); c->sigmask = p->sigmask; c->sigpending = 0; c->alarm_at = 0;
     if (vm_new(&c->as, p->as.limit)) { abandon_proc(c); return -E_NOMEM; }
     if (vm_clone(&c->as, &p->as)) { vm_free(&c->as); abandon_proc(c); return -E_NOMEM; }
     c->fds = fdt_clone(p->fds);
@@ -438,6 +440,7 @@ struct frame *proc_exit_group(struct proc *p, struct frame *f, int status)
 }
 
 static void kill_with_signal(struct proc *p, int sig) { finish(p, sig & 0x7F, 128 + sig); }
+void proc_kill_signal(struct proc *p, int sig) { kill_with_signal(p, sig); }
 
 int proc_signal(int pid, int sig)
 {
@@ -450,7 +453,7 @@ int proc_signal(int pid, int sig)
     switch (sig) {
     case 17: case 18: case 20: case 21: case 22: case 23: case 28: return 0;     /* ignored / job control by default */
     }
-    if (sig != 9 && h > 1) return 0;                                       /* a handler is installed: delivery of handlers is not implemented yet */
+    if (sig != 9 && h > 1) return sig_post(p, sig);                         /* a handler is installed: delivered when the process returns to user mode */
     kill_with_signal(p, sig);
     return 0;
 }
@@ -512,10 +515,11 @@ struct frame *proc_fault(struct frame *f)
     if (!p) panic("user-mode exception %lu without a process", f->vec);
     if (f->vec == 14 && !(f->err & 1) && !vm_fault(&p->as, cr2, (f->err & 2) != 0, (f->err & 16) != 0))
         return f;                                                          /* demand paging: the access is retried */
+    int sig = f->vec == 0 ? 8 : f->vec == 6 ? 4 : 11;
+    { struct frame *h = signal_fault(f, sig, cr2, (f->err & 1) ? 2 : 1); if (h) return h; }
     kprintf("\n\x1b[91m[proc %d '%s'] killed: %s at rip=%p\x1b[0m\n", p->pid, p->name,
             f->vec == 14 ? "page fault" : f->vec == 13 ? "general protection fault" : f->vec == 6 ? "illegal instruction" : f->vec == 0 ? "divide error" : "CPU exception", f->rip);
     if (f->vec == 14) kprintf("\x1b[91m          address %p (%s, %s)\x1b[0m\n", cr2, (f->err & 1) ? "protection violation" : "not mapped", (f->err & 16) ? "instruction fetch" : (f->err & 2) ? "write" : "read");
-    int sig = f->vec == 0 ? 8 : f->vec == 6 ? 4 : 11;
     kill_with_signal(p, sig);
     thread_mark_dead(thread_current_id());
     return sched_on_yield(f);

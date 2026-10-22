@@ -10,6 +10,7 @@ out=$(NEOS_BOOT_WAIT=10 NEOS_STEP=6 NEOS_TIMEOUT=240 tools/shell-session.sh \
   'run /bin/threads' \
   'run /bin/hello_rs x' \
   'run /bin/hello_go' \
+  'run /bin/sigtest' \
   "run /bin/busybox sh -c 'echo from-sh; ls /bin | wc -l; echo \$((6*7)) | cat; true && echo and-ok'" \
   "run /bin/busybox sh -c 'echo b a c | tr \" \" \"\\n\" | sort | head -2'" \
   'run /bin/busybox uname -s' \
@@ -32,6 +33,13 @@ check '4 threads, counter=80000 (expected 80000)'
 check 'hello from Rust on NEOS: 2 args, squares sum = 385'
 check 'thread result: 500500'
 check "hello from Go on NEOS, goroutines $want_go"
+check 'SIG raise: handler ran, value 10001'
+check 'SIG blocked: pending, handler not run yet (0)'
+check 'SIG unblocked: handler ran (1)'
+check 'SIG alarm interrupted sleep: r=-1 alarms=1'
+check 'SIG child exit: status 3 sigchld=1'
+check 'SIG segv caught and recovered: code=7 hits=1'
+check 'SIG fpu state preserved: 5.468'
 check 'from-sh'
 check '42'
 check 'and-ok'

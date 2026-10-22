@@ -42,7 +42,15 @@ void pic_eoi(u8 irq)
     outb(0x20, 0x20);
 }
 
+static struct frame *isr_dispatch_inner(struct frame *f);
 struct frame *isr_dispatch(struct frame *f)
+{
+    struct frame *r = isr_dispatch_inner(f);
+    if (sig_any && (r->cs & 3)) r = signal_deliver(r);              /* about to return to user mode: run a pending signal handler first */
+    return r;
+}
+
+static struct frame *isr_dispatch_inner(struct frame *f)
 {
     if (f->vec < 32) {
         if (f->cs & 3) return proc_fault(f);                   /* a user program misbehaved: kill it, not the kernel */
@@ -56,6 +64,7 @@ struct frame *isr_dispatch(struct frame *f)
         if (irq == 0) {
             u64 t0 = rdtsc();
             timer_tick();
+            alarm_tick();
             struct frame *n = sched_on_tick(f);
             timer_isr_account(rdtsc() - t0);
             return n;
