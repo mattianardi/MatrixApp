@@ -519,6 +519,7 @@ struct frame *proc_fault(struct frame *f)
     { struct frame *h = signal_fault(f, sig, cr2, (f->err & 1) ? 2 : 1); if (h) return h; }
     kprintf("\n\x1b[91m[proc %d '%s'] killed: %s at rip=%p\x1b[0m\n", p->pid, p->name,
             f->vec == 14 ? "page fault" : f->vec == 13 ? "general protection fault" : f->vec == 6 ? "illegal instruction" : f->vec == 0 ? "divide error" : "CPU exception", f->rip);
+    kprintf("\x1b[91m          rsp=%p last syscall %d, thread utid %d\x1b[0m\n", f->rsp, uctx_current()->last_sys, uctx_current()->utid);
     if (f->vec == 14) kprintf("\x1b[91m          address %p (%s, %s)\x1b[0m\n", cr2, (f->err & 1) ? "protection violation" : "not mapped", (f->err & 16) ? "instruction fetch" : (f->err & 2) ? "write" : "read");
     kill_with_signal(p, sig);
     thread_mark_dead(thread_current_id());
