@@ -73,8 +73,8 @@ Limiti attuali, detti chiaramente:
 - Il canale remoto è una **seriale fisica** con token (conservato solo come SHA-256, con ritardo anti-indovinello). Non c’è
   ancora un canale di rete perché manca TLS.
 - Gli agenti **scrivono, impacchettano ed eseguono** app (`run` su un ELF x86-64 per NEOS); la compilazione va fatta
-  fuori dal sistema finché non esiste una toolchain interna. Un ELF Linux standard (glibc) non gira ancora: serve l'ABI Linux.
-- Audit e journal sono in RAM (nessun disco): la catena è verificabile, non ancora persistente né firmata.
+  fuori dal sistema finché non esiste una toolchain interna. Un ELF Linux standard gira grazie all'ABI Linux (sezione dedicata).
+- Audit e journal sono in RAM: la catena è verificabile, non ancora persistente né firmata.
 - La misura delle ottimizzazioni su QEMU è rumorosa; significativa solo su hardware reale con TSC invariante.
 
 ## Processi in modalità utente (ring 3)
@@ -95,6 +95,54 @@ Limiti attuali, detti chiaramente:
 - Scrivere un programma: `user/neos.h` (nessuna libc). Comandi: `run [-b] [-g cap[:scope]] [-w lin|win] [-p prio] <prog>`,
   `proc`, `pkill`. Il filesystem iniziale arriva da un `initrd` (archivio NPK passato come modulo multiboot).
 
+## Programmi Linux e Windows non modificati
+
+**Linux (ELF x86-64)**: ABI syscall Linux completa per l'uso comune (`syscall` + ~120 chiamate: `fork/vfork/clone`
+con thread, `execve` con shebang, `wait4`, pipe, `mmap/munmap/mprotect` con demand paging, `futex`, `poll`, `/proc`
+sintetico, `arch_prctl`, FS/GS per thread). Girano senza modifiche binari **glibc, musl, Rust e Go** statici e
+**BusyBox** (shell `sh`, pipeline, 82 applet linkati in `/bin`). `binfmt` associa estensioni a interpreti (`.nio`, `.sh`).
+
+**Windows (PE64)**: il kernel riconosce i file `MZ/PE` e li avvia con `/bin/winrt`, il runtime utente di NEOS:
+loader PE (rilocazioni, import, TLS implicito, DLL), TEB/PEB via GS, ~230 API **kernel32/ntdll/msvcrt** (file,
+thread, sezioni critiche, eventi, mutex, semafori, `CreateProcess` con pipe, console ANSI, ambiente, tempo, `printf`
+compatibile Windows). I percorsi `C:\dir\f.txt` sono gli **stessi file** di `/mnt/c/dir/f.txt`; l'ambiente
+arriva dal bus di variabili nella forma Windows. Verificato con eseguibili compilati da `mingw`: un programma Windows
+scrive un file che Linux legge, un altro lancia un figlio con pipe, una variabile impostata in un mondo appare
+convertita nell'altro. Un'API non implementata viene segnalata solo se il programma la chiama davvero.
+
+## Nio, il linguaggio di NEOS
+
+`lang/nio.c` (interprete in C, gira su host e su NEOS): valori `nil/bool/int/float/str/list/map/fn`, closure,
+pipeline `|>`, argomenti impliciti (`filter(.v >= 2)`), interpolazione `"{expr}"`, `try/catch` anche come espressione,
+JSON, tabelle, `fs.*`, `path.win/lin`, `env.lin/win`, `run/sh/capture`, `sys.*` (stessi strumenti degli agenti) e `ai()`.
+Convive con i linguaggi noti: ogni programma Linux/Windows si avvia dalla stessa shell.
+
+## AIH - AI Help
+
+`aih <cosa vuoi fare, in linguaggio naturale>`: un agente AI interpreta la richiesta e produce un piano di comandi
+NEOS, Linux o Windows (anche traducendo i comandi dell'altro mondo). Il piano si rivede e si conferma
+(`[y/N]`; i passi ad alto rischio richiedono `YES`). L'agente è quello collegato a NEOS via NAP (`SUB aih` / `EVT`,
+risposta con lo strumento `aih.answer`); se nessuno risponde entro `aih.timeout_s` subentra un pianificatore locale
+bilingue. Bottone **AI Help** nel workspace grafico.
+
+## Spazio di lavoro grafico e browser
+
+Framebuffer Bochs VBE 1024×768: pannello, barra delle applicazioni, finestre trascinabili con mouse PS/2:
+**Terminale** (la stessa shell/dock), **Monitor di sistema** (CPU, memoria, jitter), **Agenti** (approva/nega con un clic,
+blocco di emergenza) e **Browser**. Il browser carica `http://` (senza TLS), `file://` e `neos://`, disegna un
+sottoinsieme di HTML (titoli, liste, tabelle, link, form con campi di testo/checkbox/pulsanti), con cronologia e scorrimento.
+Le **app web di NEOS** (`neos://system|settings|agents|files`) sono servite dal kernel e modificano il sistema da form
+(ad es. cambiare un'impostazione); i programmi Linux/Windows possono scrivere pagine in `/www` e vederle in `neos://www/...`.
+Una pagina `http://` non può aprire link `neos://`. Limiti: niente JavaScript/CSS, niente HTTPS, form inviati con GET.
+
+## Archiviazione persistente (NeoFS)
+
+Driver ATA e filesystem a istantanee **sicure contro i crash** (due slot, intestazione con SHA-256 scritta per ultima;
+se l'ultima istantanea è danneggiata si torna alla precedente). Sono persistenti `neofs.roots`
+(`/data /home /root /opt /var /mnt/c /etc/neos`): file, unità `C:` di Windows, pacchetti e impostazioni salvate
+(`tune save`). Comandi: `disk [status|sync|format]`; salvataggio automatico ogni `neofs.sync_s` secondi e allo spegnimento.
+Si attiva con `-drive file=build/neos.disk,format=raw,if=ide` (`make run` lo crea).
+
 ## Rete e pacchetti
 
 Driver e1000, ARP/IPv4/ICMP/UDP/TCP, DHCP, DNS, client HTTP. Pacchetti NPK con indice e SHA-256:
@@ -110,25 +158,26 @@ Requisiti: `gcc`, `nasm`, `ld`, `objcopy`, `qemu-system-x86_64`, `python3`.
 
 ```
 make run         # avvia in QEMU (seriale su stdio, rete e1000 user-mode)
-make test        # self-test RT + shell/interop + rete/pacchetti (anche manomissione) + processi ring 3 (isolamento, perdite) + agenti
+make test        # self-test RT, shell/interop, rete/pacchetti, ring 3, Linux, Windows, Nio, AIH, agenti, GUI, browser, disco
 ```
 
 ## Stato e cosa manca (onestamente)
 
-Fatto e testato in QEMU: boot, logo, scheduler RT, timer/jitter, console asincrona, registro impostazioni, API
-syscall, shell unificata (VGA + seriale + tastiera PS/2), dock live, bus di variabili, rete, pacchetti, FS in RAM.
-
-Non ancora fatto:
+Fatto e verificato in QEMU con test automatici (`make test`): kernel higher-half con scheduler RT, VM con demand paging,
+processi/thread/fork/exec, ABI Linux, loader e runtime Windows, shell unificata a tabelle, bus di variabili Linux⇄Windows,
+agenti nel kernel (capability, approvazioni, audit con hash, rollback, canale NAP), Nio, AIH, rete e pacchetti,
+persistenza su disco, workspace grafico e browser.
 
 | Area | Stato |
 |---|---|
-| `syscall/sysret`, `fork/exec`, thread utente multipli, memoria condivisa, `munmap`, demand paging | da fare — oggi un thread per processo e `int 0x80` |
-| ABI syscall Linux (per eseguire binari Linux non modificati); loader PE + sottosistema Win32/NT | da fare — loader ELF, ambiente, percorsi e variabili sono già pronti; i programmi attuali usano l'ABI nativa di NEOS |
-| Storage persistente (ATA/NVMe/virtio-blk) e filesystem su disco | da fare — oggi FS in RAM; le impostazioni “boot” si passano da riga di comando |
-| TLS / firme digitali dei pacchetti | da fare — oggi solo HTTP + SHA-256 + pin dell’indice |
-| SMP/APIC, isolamento dei core, tickless, priority inheritance sui mutex | da fare |
-| Grafica framebuffer / interfaccia a finestre | da fare — oggi modo testo 80×25 |
-| USB, audio, GPU, driver di rete oltre e1000 | da fare |
+| TLS / HTTPS / firme dei pacchetti | non c'è: HTTP + SHA-256 + pin dell'indice |
+| Socket per programmi Linux (`socket/connect`, epoll) | non ancora: la rete è usata dal kernel (HTTP, pacchetti) e dal browser |
+| Gestori di segnale (`sigaction`) per processi Linux | non consegnati: valgono le azioni predefinite |
+| Windows: solo PE64 con API Win32 di base | niente GUI Win32, DirectX, servizi, registro completo, PE a 32 bit |
+| Browser: niente JavaScript/CSS/HTTPS | le web-app moderne con JS non funzionano |
+| SMP/APIC (un solo core), tickless, priority inheritance | da fare |
+| USB, audio, GPU, altri driver di rete (oggi e1000, ATA PIO, PS/2, Bochs VBE) | da fare |
+| Hardware reale | provato solo su QEMU |
 
-Il non-determinismo noto: il kernel gira ora su QEMU/TCG, quindi le misure di jitter (`rt`) riflettono l’host;
+Il non-determinismo noto: il kernel gira su QEMU/TCG, quindi le misure di jitter (`rt`) riflettono l'host;
 su hardware reale con TSC invariante le statistiche diventano significative.
