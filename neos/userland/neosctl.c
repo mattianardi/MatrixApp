@@ -20,8 +20,9 @@ int main(int argc, char **argv)
         if (sp) cmd[l++] = '"';
     }
     cmd[l] = 0;
-    char out[8192];
+    char out[8192]; out[0] = 0;
     long rc = syscall(1000, cmd, out, sizeof out);
+    if (rc && !out[0]) fprintf(stderr, "neosctl: %s failed (rc=%ld)\n", argv[1], rc);
     if (out[0]) { fputs(out, rc ? stderr : stdout); if (out[strlen(out) - 1] != '\n') fputc('\n', rc ? stderr : stdout); }
     return rc < 0 ? 1 : (int)rc > 255 ? 1 : (int)rc;
 }
