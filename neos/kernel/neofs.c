@@ -52,10 +52,10 @@ static void walk_cb(struct inode *i, void *ctx)
     struct ser *s = ctx; char line[320];
     if (!in_roots(i->path)) return;
     u32 fmt = i->mode & S_IFMT;
-    if (fmt == S_IFDIR) { int n = ksnprintf(line, sizeof line, "D %o %s\n", i->mode & 07777, i->path); put(s, line, (size_t)n); }
-    else if (fmt == S_IFLNK) { int n = ksnprintf(line, sizeof line, "L %o %s\t%s\n", i->mode & 07777, i->path, i->link); put(s, line, (size_t)n); }
+    if (fmt == S_IFDIR) { int n = ksnprintf(line, sizeof line, "D %x %s\n", i->mode & 07777, i->path); put(s, line, (size_t)n); }
+    else if (fmt == S_IFLNK) { int n = ksnprintf(line, sizeof line, "L %x %s\t%s\n", i->mode & 07777, i->path, i->link); put(s, line, (size_t)n); }
     else if (fmt == S_IFREG) {
-        int n = ksnprintf(line, sizeof line, "F %o %lu %s\n", i->mode & 07777, (u64)i->size, i->path);
+        int n = ksnprintf(line, sizeof line, "F %x %lu %s\n", i->mode & 07777, (u64)i->size, i->path);
         put(s, line, (size_t)n); if (i->size) put(s, i->data, i->size); put(s, "\n", 1);
     }
 }
@@ -110,7 +110,7 @@ static int apply(const u8 *b, size_t n)
         char line[320]; size_t ll = (size_t)(nl - (b + p)); if (ll >= sizeof line) return -1;
         memcpy(line, b + p, ll); line[ll] = 0; p += ll + 1;
         u32 mode = 0; char *q = line + 2;
-        while (*q >= '0' && *q <= '7') mode = mode * 8 + (u32)(*q++ - '0');
+        while (is_digit(*q) || (*q >= 'a' && *q <= 'f')) mode = mode * 16 + (u32)(*q <= '9' ? *q - '0' : *q - 'a' + 10), q++;
         while (*q == ' ') q++;
         if (line[0] == 'D') { struct inode *d = vfs_lookup(q); if (!d) vfs_mkdir(q, mode); }
         else if (line[0] == 'L') { char *tab = strchr(q, '\t'); if (tab) { *tab = 0; if (!vfs_lookup(q)) vfs_symlink(tab + 1, q); } }
@@ -193,7 +193,8 @@ void neofs_status(void)
 {
     if (!present) { kprintf("no disk attached (start QEMU with -drive file=disk.img,format=raw,if=ide)\n"); return; }
     kprintf("disk      : %lu MiB, ATA PIO\n", (u64)ata_sectors() / 2048);
-    kprintf("snapshot  : #%lu in slot %c, sha %.16s..., %lu syncs this boot (last %lu bytes in %lu ms)\n", cur_gen, cur_slot < 0 ? '-' : 'A' + cur_slot, last_sha[0] ? last_sha : "none", total_syncs, last_bytes, last_ms);
+    char shortsha[20]; strlcpy(shortsha, last_sha[0] ? last_sha : "none", 17);
+    kprintf("snapshot  : #%lu in slot %c, sha %s, %lu syncs this boot (last %lu bytes in %lu ms)\n", cur_gen, cur_slot < 0 ? '-' : 'A' + cur_slot, shortsha, total_syncs, last_bytes, last_ms);
     kprintf("persisted : %s\n", t_roots->sval);
     kprintf("auto-sync : every %lu s (%s)\n", (u64)t_sync->val, t_on->val ? "on" : "off");
 }
