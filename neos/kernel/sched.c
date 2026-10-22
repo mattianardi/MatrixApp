@@ -29,7 +29,7 @@ struct thread {
 
 static struct thread threads[SCHED_MAX_THREADS];
 static int current;
-static u64 seq, total_run, cur_cr3, cur_fsbase;
+static u64 seq, total_run, cur_cr3, cur_fsbase, cur_gsbase;
 static u8 fx_init[512] __attribute__((aligned(16)));
 #define FXSAVE(p)  __asm__ volatile("fxsave (%0)" :: "r"(p) : "memory")
 #define FXRSTOR(p) __asm__ volatile("fxrstor (%0)" :: "r"(p) : "memory")
@@ -196,6 +196,7 @@ static struct frame *switch_to_best(struct frame *cur, int yielded)
         if (t->proc) FXSAVE(t->fx);
         if (threads[next].proc) {
             FXRSTOR(threads[next].fx);
+            if (threads[next].uc.gsbase != cur_gsbase) { cur_gsbase = threads[next].uc.gsbase; __asm__ volatile("wrmsr" :: "c"(0xC0000101), "a"((u32)cur_gsbase), "d"((u32)(cur_gsbase >> 32))); }
             if (threads[next].uc.fsbase != cur_fsbase) { cur_fsbase = threads[next].uc.fsbase; __asm__ volatile("wrmsr" :: "c"(0xC0000100), "a"((u32)cur_fsbase), "d"((u32)(cur_fsbase >> 32))); }
         }
     }
@@ -340,4 +341,11 @@ void sched_dump(void)
         if (t->proc) kprintf(" last_syscall=%d utid=%d", t->uc.last_sys, t->uc.utid);
         kprintf("\n");
     }
+}
+
+void sched_set_gsbase(u64 v)
+{
+    threads[current].uc.gsbase = v;
+    cur_gsbase = v;
+    __asm__ volatile("wrmsr" :: "c"(0xC0000101), "a"((u32)v), "d"((u32)(v >> 32)));
 }

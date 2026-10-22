@@ -53,12 +53,20 @@ $(BUILD)/linux/nio: lang/nio.c | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	gcc -O2 -static -DNIO_NEOS -Wno-misleading-indentation -o $@ $< -lm
 NIO_TESTS := $(wildcard lang/tests/*.nio lang/tests/*.out)
+WINRT_SRC := $(wildcard winrt/*.c winrt/*.h)
+$(BUILD)/linux/winrt: $(WINRT_SRC) | $(BUILD)
+	@mkdir -p $(BUILD)/linux
+	gcc -O2 -static -Wno-attributes -o $@ winrt/*.c -lm -lpthread
+WIN_EXES := wintest winchild wincoop
+$(BUILD)/win/%.exe: winrt/tests/%.c | $(BUILD)
+	@mkdir -p $(BUILD)/win
+	x86_64-w64-mingw32-gcc -O2 -o $@ $<
 $(BUILD)/linux/busybox: | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	cp /usr/bin/busybox $@
 
-$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) $(addprefix $(BUILD)/linux/,$(LINUX_BINS)) $(BUILD)/linux/busybox $(BUILD)/linux/nio $(NIO_TESTS) tools/mkinitrd.py
-	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) $(foreach p,$(LINUX_BINS),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox bin/nio=$(BUILD)/linux/nio $(foreach f,$(NIO_TESTS),lib/nio/tests/$(notdir $(f))=$(f)) etc/motd=README.md
+$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) $(addprefix $(BUILD)/linux/,$(LINUX_BINS)) $(BUILD)/linux/busybox $(BUILD)/linux/nio $(BUILD)/linux/winrt $(addprefix $(BUILD)/win/,$(addsuffix .exe,$(WIN_EXES))) $(NIO_TESTS) tools/mkinitrd.py
+	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) $(foreach p,$(LINUX_BINS),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox bin/nio=$(BUILD)/linux/nio bin/winrt=$(BUILD)/linux/winrt $(foreach w,$(WIN_EXES),bin/$(w).exe=$(BUILD)/win/$(w).exe) $(foreach f,$(NIO_TESTS),lib/nio/tests/$(notdir $(f))=$(f)) etc/motd=README.md
 
 $(BUILD)/%.o: kernel/%.asm | $(BUILD)
 	$(NASM) -f elf64 $< -o $@
@@ -87,6 +95,7 @@ test: all
 	@$(MAKE) --no-print-directory nettest
 	@$(MAKE) --no-print-directory usertest
 	@$(MAKE) --no-print-directory linuxtest
+	@$(MAKE) --no-print-directory wintest
 	@$(MAKE) --no-print-directory niotest
 	@$(MAKE) --no-print-directory aihtest
 	@$(MAKE) --no-print-directory agenttest
@@ -103,6 +112,9 @@ linuxtest: all
 usertest: all
 	@tools/check-user.sh
 
+wintest: all
+	@tools/check-win.sh
+
 niotest: all
 	@tools/check-nio.sh
 
@@ -115,4 +127,4 @@ agenttest: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test shelltest nettest usertest linuxtest niotest aihtest agenttest clean
+.PHONY: all run test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest clean

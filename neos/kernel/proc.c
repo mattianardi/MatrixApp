@@ -195,6 +195,20 @@ static int load_image(struct proc *p, struct aspace *as, const char *path, struc
     if ((ino->mode & S_IFMT) != S_IFREG) { *err = "not a regular file"; return -1; }
     img = ino->data; n = ino->size;
 
+    if (n >= 64 && img[0] == 'M' && img[1] == 'Z' && depth < 4) {                               /* Windows executable: the PE loader runs it */
+        u32 pe = *(const u32 *)(img + 0x3C);
+        if (pe + 4 < n && !memcmp(img + pe, "PE\0\0", 4)) {
+            struct argblock *nb = argblock_new();
+            if (!nb) { *err = "out of memory"; return -1; }
+            argblock_add(nb, 0, "/bin/winrt");
+            argblock_add(nb, 0, full);
+            for (int i = 1; i < ab->argc; i++) argblock_add(nb, 0, ab->argv[i]);
+            for (int i = 0; i < ab->envc; i++) argblock_add(nb, 1, ab->envp[i]);
+            int r = load_image(p, as, "/bin/winrt", nb, depth + 1, entry, sp, brk_start, err);
+            argblock_free(nb);
+            return r;
+        }
+    }
     if (n >= 4 && !(img[0] == 0x7f && img[1] == 'E') && !(img[0] == '#' && img[1] == '!')) {      /* not ELF, not #!: ask the binfmt registry */
         const typeof(binfmts[0]) *bf = binfmt_for(full);
         if (bf && depth < 4) {
@@ -261,6 +275,11 @@ int proc_spawn(const char *path, int argc, char **argv, const struct spawn_opts 
     struct proc *p = alloc_proc();
     if (!p) { *err = "process table full"; return -1; }
     p->world = o->world ? o->world : NEOS_VIEW_LINUX;
+    if (!o->world) {                                                       /* a PE file runs in the Windows world: its environment is rendered the Windows way */
+        char pf[128]; fs_norm(path, pf, sizeof pf);
+        struct inode *pi = vfs_lookup(pf);
+        if (pi && pi->size > 0x40 && pi->data && pi->data[0] == 'M' && pi->data[1] == 'Z') p->world = NEOS_VIEW_WINDOWS;
+    }
     p->start_tick = ticks;
     bus_get("PWD", NEOS_VIEW_LINUX, p->cwd, sizeof p->cwd);
     if (!p->cwd[0]) strlcpy(p->cwd, "/", sizeof p->cwd);
@@ -328,7 +347,7 @@ int proc_execve(struct proc *p, struct frame *f, const char *path, struct argblo
     if (old) { vm_free(old); kfree(old); }
     fdt_close_cloexec(p->fds);
     memset(p->sig, 0, sizeof p->sig);
-    sched_set_fsbase(0);
+    sched_set_fsbase(0); sched_set_gsbase(0);
     uctx_current()->clear_tid = 0;
     p->entry = entry; p->brk_start = p->brk = brk0; p->mmap_next = MMAP_BASE;
     strlcpy(p->name, base_name(p->exe), sizeof p->name);
@@ -368,7 +387,7 @@ long proc_fork(struct proc *p, const struct frame *f, u64 child_stack)
     cf.rax = 0;
     if (child_stack) cf.rsp = child_stack;
     c->nthreads = 1; c->next_utid = c->pid + 1; c->state = P_RUN;
-    struct uctx cu = { .fsbase = uctx_current()->fsbase, .clear_tid = 0, .utid = c->pid };
+    struct uctx cu = { .fsbase = uctx_current()->fsbase, .gsbase = uctx_current()->gsbase, .clear_tid = 0, .utid = c->pid };
     int tid = thread_create_user_frame(c->name, (u8)thread_prio_of(thread_current_id()), c, c->as.pml4, &cf, &cu);
     if (tid < 0) { agent_remove(c->principal->name); fdt_release(c->fds); vm_free(&c->as); abandon_proc(c); return -E_AGAIN; }
     c->main_tid = tid;
@@ -387,7 +406,7 @@ long proc_clone_thread(struct proc *p, const struct frame *f, u64 child_stack, u
     if (child_stack) cf.rsp = child_stack;
     int utid = p->next_utid++;
     if (utid < next_pid) { utid = next_pid++; }
-    struct uctx nu = { .fsbase = (flags & CLONE_SETTLS) ? tls : uctx_current()->fsbase, .clear_tid = (flags & CLONE_CHILD_CLEARTID) ? ctid : 0, .utid = utid };
+    struct uctx nu = { .fsbase = (flags & CLONE_SETTLS) ? tls : uctx_current()->fsbase, .gsbase = uctx_current()->gsbase, .clear_tid = (flags & CLONE_CHILD_CLEARTID) ? ctid : 0, .utid = utid };
     p->nthreads++;
     int tid = thread_create_user_frame(p->name, (u8)thread_prio_of(thread_current_id()), p, p->as.pml4, &cf, &nu);
     if (tid < 0) { p->nthreads--; return -E_AGAIN; }

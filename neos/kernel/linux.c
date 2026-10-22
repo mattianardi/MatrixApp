@@ -560,6 +560,8 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 157: RET(a0 == 15 || a0 == 16 || a0 == 38 || a0 == 4 || a0 == 3 ? 0 : -E_INVAL);                      /* prctl */
     case 158: {                                                           /* arch_prctl */
         if (a0 == 0x1002) { sched_set_fsbase(a1); RET(0); }
+        if (a0 == 0x1001) { sched_set_gsbase(a1); RET(0); }
+        if (a0 == 0x1004) { u64 v = uctx_current()->gsbase; RET(copy_to_user(&p->as, a1, &v, 8) ? -E_FAULT : 0); }
         if (a0 == 0x1003) { u64 v = uctx_current()->fsbase; RET(copy_to_user(&p->as, a1, &v, 8) ? -E_FAULT : 0); }
         RET(-E_INVAL);
     }

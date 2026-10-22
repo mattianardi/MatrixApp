@@ -184,7 +184,7 @@ void sched_latency(u64 *max_ns, u64 *avg_ns, u64 *n);   /* ready->running latenc
 void sched_latency_reset(void);
 
 /* per-thread user context (Linux ABI): TLS base, CLONE_CHILD_CLEARTID address, user-visible thread id */
-struct uctx { u64 fsbase, clear_tid; int utid; int last_sys; };
+struct uctx { u64 fsbase, gsbase, clear_tid; int utid; int last_sys; };
 struct uctx *uctx_current(void);
 struct uctx *uctx_of(int id);
 int  thread_current_id(void);
@@ -196,6 +196,7 @@ int  thread_create_user(const char *name, u8 prio, void *proc, u64 cr3, u64 rip,
 int  thread_create_user_frame(const char *name, u8 prio, void *proc, u64 cr3, const struct frame *init, const struct uctx *uc);
 
 void sched_switch_cr3(u64 cr3);
+void sched_set_gsbase(u64 v);        /* Windows programs keep their TEB here */
 void sched_dump(void);               /* Ctrl-T: every thread, what it waits on, its last syscall */
 void sched_kill_threads_of(void *proc);
 void sched_kill_threads_of_except(void *proc, int keep);
