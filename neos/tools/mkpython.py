@@ -82,9 +82,9 @@ for soname, real in libs.items():
 # pip travels as its wheel (importable from a zip) found through a .pth file
 whl = glob.glob(f"{LIBDIR}/ensurepip/_bundled/pip-*.whl")[0]
 files["lib/" + os.path.basename(whl)] = open(whl, "rb").read()
-files[f"lib/python{PYVER}/site-packages/neos-pip.pth"] = f"/opt/python3/lib/{os.path.basename(whl)}\n".encode()
-files[f"lib/python{PYVER}/site-packages/neos.py"] = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "userland", "python", "neos.py"), "rb").read()
-files[f"lib/python{PYVER}/site-packages/README.txt"] = b"pip installs packages here (kept across reboots by NeoFS).\n"
+files[f"local/lib/python{PYVER}/dist-packages/neos-pip.pth"] = f"/opt/python3/lib/{os.path.basename(whl)}\n".encode()
+files[f"local/lib/python{PYVER}/dist-packages/neos.py"] = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "userland", "python", "neos.py"), "rb").read()
+files[f"local/lib/python{PYVER}/dist-packages/README.txt"] = b"pip installs packages here (kept across reboots by NeoFS).\n"
 files["bin/pip"] = b"#!/opt/python3/bin/python3\nimport sys\nfrom pip._internal.cli.main import main\nsys.exit(main())\n"
 files["bin/pip3"] = files["bin/pip"]
 pv = subprocess.run([PYBIN, "--version"], capture_output=True, text=True).stdout.split()[-1]

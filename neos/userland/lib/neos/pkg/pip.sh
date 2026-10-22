@@ -13,7 +13,7 @@ sync_records() {
   $PY -m pip list --format=freeze 2>/dev/null | while IFS='=' read -r n _ v; do
     [ -n "$n" ] && neosctl pkg.record "pip:$n" "$v" "pip" >/dev/null
   done
-  link_bins /opt/python3/bin
+  link_bins /opt/python3/bin /opt/python3/local/bin
 }
 case $sub in
   install)
