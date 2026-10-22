@@ -213,7 +213,9 @@ int vm_munmap(struct aspace *as, u64 start, u64 len)
     for (u64 va = start; va < end; va += 4096) {
         u64 *pte = pte_of(as, va, 0);
         if (pte && (*pte & P_PRESENT)) {
-            pmm_free(*pte & ADDR_MASK, 1); *pte = 0; as->pages--;
+            u64 fr = *pte & ADDR_MASK; *pte = 0; as->pages--;
+            __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
+            pmm_free(fr, 1);
             __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
         }
     }
@@ -258,12 +260,13 @@ int vm_fault(struct aspace *as, u64 addr, int write, int exec)
     if (write && !(v->prot & PROT_WRITE)) return -1;
     if (exec && !(v->prot & PROT_EXEC)) return -1;
     if (!(v->prot & (PROT_READ | PROT_WRITE | PROT_EXEC))) return -1;
+    u64 flg = irq_save();                                               /* threads of one process share the table: populate a page exactly once */
     u64 *pte = pte_of(as, addr, 1);
-    if (!pte) return -1;
-    if (*pte & P_PRESENT) return -1;                                    /* present: this is a protection fault, not a miss */
-    if (as->pages >= as->limit) return -1;
+    if (!pte) { irq_restore(flg); return -1; }
+    if (*pte & P_PRESENT) { irq_restore(flg); return -1; }             /* present: a protection fault, or another thread just mapped it */
+    if (as->pages >= as->limit) { irq_restore(flg); return -1; }
     u64 f = pmm_alloc(1);
-    if (!f) return -1;
+    if (!f) { irq_restore(flg); return -1; }
     u8 *pg = (u8 *)tbl(f);
     memset(pg, 0, 4096);
     if (v->ino) {
@@ -273,6 +276,7 @@ int vm_fault(struct aspace *as, u64 addr, int write, int exec)
     *pte = f | P_PRESENT | P_USER | ((v->prot & PROT_WRITE) ? P_WRITE : 0) | ((v->prot & PROT_EXEC) ? 0 : P_NX);
     as->pages++;
     __asm__ volatile("invlpg (%0)" :: "r"(addr) : "memory");
+    irq_restore(flg);
     return 0;
 }
 

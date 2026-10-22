@@ -46,27 +46,39 @@ void pmm_init(const void *mbi)
         for (u64 a = mods[i * 4] & ~0xFFFull; a < mods[i * 4 + 1]; a += PAGE) { if (!(bitmap[(a / PAGE) / 32] & (1u << ((a / PAGE) % 32)))) { mark(a / PAGE, 1); total_count--; } }
 }
 
+/* The bitmap is shared by every thread and the kernel is preemptible: scan + claim must be one atomic step, or two
+ * threads can be handed the same frame (which later shows up as a double free). `lowest` bounds the scan. */
+static u64 lowest;
+
 u64 pmm_alloc(size_t pages)
 {
+    u64 fl = irq_save();
     size_t run = 0;
-    for (u64 i = 0; i < MAX_PAGES; i++) {
+    u64 result = 0;
+    for (u64 i = lowest; i < MAX_PAGES; i++) {
         run = (bitmap[i / 32] >> (i % 32)) & 1 ? 0 : run + 1;
         if (run == pages) {
             u64 first = i + 1 - pages;
             for (u64 j = first; j <= i; j++) mark(j, 1);
-            return first * PAGE;
+            if (first == lowest) lowest = i + 1;
+            result = first * PAGE;
+            break;
         }
     }
-    return 0;
+    irq_restore(fl);
+    return result;
 }
 
 void pmm_free(u64 addr, size_t pages)
 {
+    u64 fl = irq_save();
     for (size_t i = 0; i < pages; i++) {
         u64 pg = addr / PAGE + i;
-        if (!(bitmap[pg / 32] & (1u << (pg % 32)))) panic("pmm: double free of physical page %lx (caller %p, free context: %s pid %d)", pg * PAGE, __builtin_return_address(0), dbg_free_what, dbg_free_pid);
+        if (!(bitmap[pg / 32] & (1u << (pg % 32)))) { irq_restore(fl); panic("pmm: double free of physical page %lx (caller %p, free context: %s pid %d)", pg * PAGE, __builtin_return_address(0), dbg_free_what, dbg_free_pid); }
         mark(pg, 0);
+        if (pg < lowest) lowest = pg;
     }
+    irq_restore(fl);
 }
 
 size_t pmm_free_pages(void) { return free_count; }
