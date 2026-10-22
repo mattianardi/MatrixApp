@@ -4,9 +4,10 @@
  * TCP client: active open, in-order receive into a ring (out-of-order data is dropped and
  * re-ACKed so the peer retransmits), stop-and-wait send with retransmission. Enough for HTTP.
  */
-#define MAXC  4
+#define MAXC  32
+#define MAXL  8
 #define RXSZ  32768
-enum { S_FREE, S_SYN, S_EST, S_CLOSED };
+enum { S_FREE, S_SYN, S_EST, S_CLOSED, S_RCVD };
 #define F_FIN 1
 #define F_SYN 2
 #define F_RST 4
@@ -18,13 +19,17 @@ struct tcp_conn {
     u32 rip; u16 rport, lport;
     u32 snd_una, snd_nxt, rcv_nxt;
     volatile u32 whead, rtail;
-    volatile int fin, rst;
+    volatile int fin, rst, fin_sent;
+    struct tcp_listener *listener;
     u32 adv_win;
     u8 *rx;
 };
+struct tcp_listener { int used; u16 port; struct tcp_conn *q[8]; volatile u32 qh, qt; };
 struct tcph { u16 sport, dport; u32 seq, ack; u16 off_flags, win, csum, urg; } __attribute__((packed));
 
 static struct tcp_conn conns[MAXC];
+static struct tcp_listener listeners[MAXL];
+extern int tcp_rx_loopback;
 static u16 next_port = 49152;
 static struct tunable *t_mss, *t_rto, *t_retries;
 
@@ -70,7 +75,7 @@ struct tcp_conn *tcp_connect(u32 ip, u16 port, u64 timeout_ms)
     if (!c->rx) c->rx = kmalloc(RXSZ);
     if (!c->rx) { c->state = S_FREE; return NULL; }
     c->rip = ip; c->rport = port; c->lport = next_port++; if (next_port < 49152) next_port = 49152;
-    c->whead = c->rtail = 0; c->fin = c->rst = 0;
+    c->whead = c->rtail = 0; c->fin = c->rst = c->fin_sent = 0; c->listener = NULL;
     u32 iss = (u32)time_ns() * 2654435761u;
     c->snd_una = iss; c->snd_nxt = iss + 1; c->rcv_nxt = 0;
     c->state = S_SYN;
@@ -120,7 +125,8 @@ int tcp_recv(struct tcp_conn *c, void *buf, int cap, u64 timeout_ms)
 
 void tcp_close(struct tcp_conn *c)
 {
-    if (c->state == S_EST && !c->rst) {
+    if (c->state == S_EST && !c->rst && !c->fin_sent) {
+        c->fin_sent = 1;
         u32 fin_seq = c->snd_nxt;
         c->snd_nxt++;
         for (int tries = 0; tries < 3; tries++) {
@@ -141,7 +147,7 @@ void tcp_input(u32 src, const u8 *seg, int len)
     const struct tcph *h = (const void *)seg;
     int hl = (be16(h->off_flags) >> 12) * 4, flags = be16(h->off_flags) & 0x3F;
     if (hl < 20 || hl > len) return;
-    if (ip_checksum(seg, len, ip_pseudo_sum(src, net_ip(), 6, len)) != 0) return;
+    if (!tcp_rx_loopback && ip_checksum(seg, len, ip_pseudo_sum(src, net_ip(), 6, len)) != 0) return;
     u16 sp = be16(h->sport), dp = be16(h->dport);
     u32 seq = be32(h->seq), ack = be32(h->ack);
     int plen = len - hl;
@@ -149,6 +155,25 @@ void tcp_input(u32 src, const u8 *seg, int len)
     struct tcp_conn *c = NULL;
     for (int i = 0; i < MAXC; i++)
         if (conns[i].state != S_FREE && conns[i].rip == src && conns[i].rport == sp && conns[i].lport == dp) c = &conns[i];
+    if (!c && (flags & F_SYN) && !(flags & F_ACK)) {                      /* passive open */
+        struct tcp_listener *l = NULL;
+        for (int i = 0; i < MAXL; i++) if (listeners[i].used && listeners[i].port == dp) l = &listeners[i];
+        if (l && l->qh - l->qt < 8) {
+            u64 fl = irq_save();
+            for (int i = 0; i < MAXC; i++) if (conns[i].state == S_FREE) { c = &conns[i]; c->state = S_RCVD; break; }
+            irq_restore(fl);
+            if (c) {
+                if (!c->rx) c->rx = kmalloc(RXSZ);
+                if (!c->rx) { c->state = S_FREE; return; }
+                tcp_tunables();
+                c->rip = src; c->rport = sp; c->lport = dp; c->whead = c->rtail = 0; c->fin = c->rst = c->fin_sent = 0; c->listener = l;
+                u32 iss = (u32)time_ns() * 2654435761u;
+                c->snd_una = iss; c->snd_nxt = iss + 1; c->rcv_nxt = seq + 1;
+                send_seg(c, src, dp, sp, iss, c->rcv_nxt, F_SYN | F_ACK, free_space(c), NULL, 0, (int)t_mss->val);
+                return;
+            }
+        }
+    }
     if (!c) {
         if (!(flags & F_RST))                                  /* nobody home: tell the peer to stop */
             send_seg(NULL, src, dp, sp, (flags & F_ACK) ? ack : 0, seq + plen + ((flags & (F_SYN | F_FIN)) ? 1 : 0),
@@ -157,6 +182,13 @@ void tcp_input(u32 src, const u8 *seg, int len)
     }
     if (flags & F_RST) { c->rst = 1; c->state = S_CLOSED; return; }
 
+    if (c->state == S_RCVD) {
+        if (flags & F_SYN) { send_seg(c, c->rip, c->lport, c->rport, c->snd_una, c->rcv_nxt, F_SYN | F_ACK, free_space(c), NULL, 0, (int)t_mss->val); return; }
+        if ((flags & F_ACK) && ack == c->snd_nxt) {
+            c->snd_una = ack; c->state = S_EST;
+            if (c->listener) { c->listener->q[c->listener->qh % 8] = c; c->listener->qh++; }
+        } else return;
+    }
     if (c->state == S_SYN) {
         if ((flags & (F_SYN | F_ACK)) == (F_SYN | F_ACK) && ack == c->snd_nxt) {
             c->rcv_nxt = seq + 1; c->snd_una = ack; c->state = S_EST;
@@ -181,3 +213,38 @@ void tcp_input(u32 src, const u8 *seg, int len)
     if ((flags & F_FIN) && seq + plen == c->rcv_nxt && !c->fin) { c->rcv_nxt++; c->fin = 1; acked_now = 1; }
     if (acked_now) send_ctl(c, F_ACK);
 }
+
+int tcp_available(struct tcp_conn *c) { return c->whead != c->rtail || c->fin || c->rst; }
+int tcp_is_open(struct tcp_conn *c) { return c->state == S_EST && !c->rst; }
+int tcp_peer(struct tcp_conn *c, u32 *ip, u16 *port, u16 *lport) { *ip = c->rip; *port = c->rport; *lport = c->lport; return 0; }
+
+void tcp_shutdown_wr(struct tcp_conn *c)
+{
+    if (c->state != S_EST || c->rst || c->fin_sent) return;
+    c->fin_sent = 1;
+    u32 fin_seq = c->snd_nxt; c->snd_nxt++;
+    send_seg(c, c->rip, c->lport, c->rport, fin_seq, c->rcv_nxt, F_FIN | F_ACK, free_space(c), NULL, 0, 0);
+}
+
+struct tcp_listener *tcp_listen(u16 port)
+{
+    tcp_tunables();
+    for (int i = 0; i < MAXL; i++) if (listeners[i].used && listeners[i].port == port) return NULL;      /* EADDRINUSE */
+    for (int i = 0; i < MAXL; i++) if (!listeners[i].used) { memset(&listeners[i], 0, sizeof listeners[i]); listeners[i].port = port; listeners[i].used = 1; return &listeners[i]; }
+    return NULL;
+}
+int tcp_listener_ready(struct tcp_listener *l) { return l->qh != l->qt; }
+struct tcp_conn *tcp_accept_try(struct tcp_listener *l)
+{
+    if (l->qh == l->qt) return NULL;
+    struct tcp_conn *c = l->q[l->qt % 8]; l->qt++;
+    return c;
+}
+void tcp_unlisten(struct tcp_listener *l)
+{
+    while (l->qh != l->qt) { struct tcp_conn *c = l->q[l->qt % 8]; l->qt++; tcp_close(c); }
+    l->used = 0;
+}
+u32 tcp_rx_gen(struct tcp_conn *c) { return c->whead + (c->fin ? 1u : 0u) + (c->rst ? 2u : 0u) + (c->state == S_EST ? 4u : 0u); }
+u32 tcp_listener_gen(struct tcp_listener *l) { return l->qh; }
+int tcp_readable(struct tcp_conn *c) { return (int)(c->whead - c->rtail); }

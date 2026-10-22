@@ -51,6 +51,22 @@ int  tcp_send(struct tcp_conn *c, const void *data, int len);
 int  tcp_recv(struct tcp_conn *c, void *buf, int cap, u64 timeout_ms);   /* >0 bytes, 0 = peer closed, <0 timeout/reset */
 void tcp_close(struct tcp_conn *c);
 void tcp_tick(void);
+struct tcp_listener;
+int  tcp_available(struct tcp_conn *c);
+int  tcp_is_open(struct tcp_conn *c);
+int  tcp_peer(struct tcp_conn *c, u32 *ip, u16 *port, u16 *lport);
+void tcp_shutdown_wr(struct tcp_conn *c);
+struct tcp_listener *tcp_listen(u16 port);
+int  tcp_listener_ready(struct tcp_listener *l);
+struct tcp_conn *tcp_accept_try(struct tcp_listener *l);
+void tcp_unlisten(struct tcp_listener *l);
+u32  tcp_rx_gen(struct tcp_conn *c);
+u32  tcp_listener_gen(struct tcp_listener *l);
+int  tcp_readable(struct tcp_conn *c);
+typedef void (*udp_cb2)(void *ctx, u32 src, u16 sport, const u8 *data, int len);
+int  udp_bind_ctx(u16 port, udp_cb2 cb, void *ctx);
+void udp_unbind(u16 port);
+u16  udp_ephemeral(void);
 
 /* http.c */
 int  http_get(const char *url, void *buf, size_t cap, size_t *len, int *status, const char **err);

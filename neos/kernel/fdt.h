@@ -1,7 +1,7 @@
 #pragma once
 #include "vfs.h"
 
-enum { FT_NONE, FT_INODE, FT_PIPE_R, FT_PIPE_W, FT_TTY, FT_DIR };
+enum { FT_NONE, FT_INODE, FT_PIPE_R, FT_PIPE_W, FT_TTY, FT_DIR, FT_SOCK, FT_EPOLL, FT_EVENTFD };
 #define O_ACCMODE 3
 #define O_WRONLY 1
 #define O_RDWR 2
@@ -15,12 +15,15 @@ enum { FT_NONE, FT_INODE, FT_PIPE_R, FT_PIPE_W, FT_TTY, FT_DIR };
 #define O_NOFOLLOW 0400000
 #define O_CLOEXEC 02000000
 
-struct pipe;
+struct pipe; struct sock; struct epoll;
 struct file {
     int type, refs, flags;
     i64 off;
     struct inode *ino;
     struct pipe *pipe;
+    struct sock *sock;
+    struct epoll *ep;
+    u64 evcount; u32 evgen;
 };
 
 #define MAX_FDS 128
@@ -40,6 +43,10 @@ int    pipe_create(struct file **r, struct file **w);
 long   file_read(struct file *f, void *buf, size_t n);        /* may sleep; <0 = -errno */
 long   file_write(struct file *f, const void *buf, size_t n);
 int    file_poll_ready(struct file *f, int events);           /* 1 = ready */
+u32    file_in_gen(struct file *f);                           /* grows when new input arrives (edge-triggered epoll) */
+struct epoll_ev { u32 events; u64 data; } __attribute__((packed));
+int    epoll_ctl_op(struct file *ep, struct fdtable *t, int op, int fd, u32 events, u64 data);
+int    epoll_collect(struct file *ep, struct fdtable *t, struct epoll_ev *out, int max);
 
 /* terminal: cooked input fed by whoever owns the keyboard (the shell while a program is in the foreground) */
 void   tty_init(void);

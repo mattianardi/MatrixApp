@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Boot NEOS, optionally drive the shell over serial and the mouse through the QEMU monitor, save PNG screenshots.
    tools/screenshot.py out_prefix [--cmd 'shell command']... [--mouse 'dx dy' | --click | --release]... [--shot name]"""
-import socket, subprocess, sys, time, os, zlib, struct, tempfile
+import socket, subprocess, sys, time, os, zlib, struct, tempfile, threading
 def ppm_to_png(ppm, png):
     d = open(ppm, 'rb').read()
     parts = d.split(b'\n', 3)
@@ -19,8 +19,21 @@ class Session:
         self.p = subprocess.Popen(['qemu-system-x86_64', '-kernel', 'build/matrix32.elf', '-initrd', 'build/initrd.npk', '-m', '512', '-display', 'none',
             '-cpu', 'max', '-serial', 'stdio', '-no-reboot', '-vga', 'std', '-nic', 'user,model=e1000', '-monitor', f'unix:{self.mon},server,nowait'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.out = ''
+        threading.Thread(target=self._reader, daemon=True).start()
         time.sleep(boot)
         self.m = socket.socket(socket.AF_UNIX); self.m.connect(self.mon); time.sleep(0.3); self.m.recv(65536)
+    def _reader(self):
+        while True:
+            b = self.p.stdout.read1(4096) if hasattr(self.p.stdout, 'read1') else self.p.stdout.read(1)
+            if not b: break
+            self.out += b.decode('latin1')
+    def expect(self, text, timeout=60):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if text in self.out: return True
+            time.sleep(0.3)
+        return False
     def hmp(self, c):
         self.m.sendall(c.encode() + b'\n'); time.sleep(0.4)
         try: self.m.settimeout(0.5); return self.m.recv(65536)
@@ -37,9 +50,8 @@ class Session:
     def close(self):
         try: self.p.stdin.write(b'poweroff\n'); self.p.stdin.flush()
         except Exception: pass
-        time.sleep(1); self.p.kill()
-        try: return self.p.stdout.read().decode('latin1')
-        except Exception: return ''
+        time.sleep(1); self.p.kill(); time.sleep(0.5)
+        return self.out
 if __name__ == '__main__':
     s = Session()
     w, h, pix = s.shot(sys.argv[1]); print(w, h); s.close()

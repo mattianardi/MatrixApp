@@ -1,5 +1,6 @@
 #include "fdt.h"
 #include "shell.h"
+#include "sock.h"
 
 /* ------------------------------------------------------------ pipes */
 #define PIPE_CAP 65536
@@ -35,6 +36,8 @@ void file_put(struct file *f)
     int last = --f->refs == 0;
     irq_restore(fl);
     if (!last) return;
+    if (f->sock) sock_free(f->sock);
+    if (f->ep) kfree(f->ep);
     if (f->pipe) {
         struct pipe *p = f->pipe;
         fl = irq_save();                                       /* count and "am I the last?" decided together, or both closers free it */
@@ -56,6 +59,14 @@ long file_read(struct file *f, void *buf, size_t n)
         return r;
     }
     case FT_DIR: return -E_ISDIR;
+    case FT_SOCK: return sock_recv(f->sock, buf, n, f->flags & O_NONBLOCK, NULL, NULL);
+    case FT_EVENTFD: {
+        if (n < 8) return -E_INVAL;
+        u64 fl = irq_save();
+        while (!f->evcount) { if (f->flags & O_NONBLOCK) { irq_restore(fl); return -E_AGAIN; } sleep_on_locked(f, ~0ull); }
+        u64 v = f->evcount; f->evcount = 0; irq_restore(fl);
+        memcpy(buf, &v, 8); return 8;
+    }
     case FT_TTY: return tty_read(buf, n, f->flags & O_NONBLOCK);
     case FT_PIPE_R: {
         struct pipe *p = f->pipe;
@@ -87,6 +98,13 @@ long file_write(struct file *f, const void *buf, size_t n)
         return r;
     }
     case FT_DIR: return -E_ISDIR;
+    case FT_SOCK: return sock_send(f->sock, buf, n, 0, 0, 0);
+    case FT_EVENTFD: {
+        if (n < 8) return -E_INVAL;
+        u64 v; memcpy(&v, buf, 8);
+        u64 fl = irq_save(); f->evcount += v; f->evgen++; irq_restore(fl);
+        wake_on(f, 64); return 8;
+    }
     case FT_TTY: tty_write(buf, n); return (long)n;
     case FT_PIPE_W: {
         struct pipe *p = f->pipe;
@@ -118,8 +136,73 @@ int file_poll_ready(struct file *f, int events)
     if (f->type == FT_PIPE_R) { if (events & 1) r |= (f->pipe->head != f->pipe->tail || !f->pipe->writers) ? 1 : 0; }
     else if (f->type == FT_PIPE_W) { if (events & 4) r |= 4; }
     else if (f->type == FT_TTY) { if ((events & 1) && tty_has_input()) r |= 1; if (events & 4) r |= 4; }
+    else if (f->type == FT_SOCK) r = sock_poll(f->sock, events);
+    else if (f->type == FT_EVENTFD) { if ((events & 1) && f->evcount) r |= 1; if (events & 4) r |= 4; }
     else r = events & 5;
     return r;
+}
+
+u32 file_in_gen(struct file *f)
+{
+    switch (f->type) {
+    case FT_SOCK: return sock_in_gen(f->sock);
+    case FT_EVENTFD: return f->evgen;
+    case FT_PIPE_R: return f->pipe->head;
+    default: return 0;
+    }
+}
+
+/* ------------------------------------------------------------ epoll: interest lists over the caller's own descriptors */
+#define EP_MAX 64
+#define EPOLLET_ 0x80000000u
+struct epoll { struct { int fd; u32 events; u64 data; u32 seen; u8 used, out_done; } e[EP_MAX]; };
+
+int epoll_ctl_op(struct file *ep, struct fdtable *t, int op, int fd, u32 events, u64 data)
+{
+    struct file *tf = fdt_get(t, fd);
+    if (!tf) return -E_BADF;
+    if (!ep->ep) return -E_INVAL;
+    struct epoll *e = ep->ep; int slot = -1, free = -1;
+    for (int i = 0; i < EP_MAX; i++) { if (e->e[i].used && e->e[i].fd == fd) slot = i; if (!e->e[i].used && free < 0) free = i; }
+    if (op == 1) {                                                       /* ADD */
+        if (tf->type == FT_INODE || tf->type == FT_DIR) return -E_PERM;  /* regular files are always ready: Linux refuses them too */
+        if (slot >= 0) return -E_EXIST;
+        if (free < 0) return -E_NOMEM;
+        e->e[free].used = 1; e->e[free].fd = fd; e->e[free].events = events; e->e[free].data = data; e->e[free].seen = file_in_gen(tf); e->e[free].out_done = 0;
+        return 0;
+    }
+    if (slot < 0) return -E_NOENT;
+    if (op == 2) { e->e[slot].used = 0; return 0; }                      /* DEL */
+    if (op == 3) { e->e[slot].events = events; e->e[slot].data = data; e->e[slot].seen = file_in_gen(tf); e->e[slot].out_done = 0; return 0; }   /* MOD */
+    return -E_INVAL;
+}
+
+int epoll_collect(struct file *ep, struct fdtable *t, struct epoll_ev *out, int max)
+{
+    struct epoll *e = ep->ep; int n = 0;
+    if (!e) return 0;
+    for (int i = 0; i < EP_MAX && n < max; i++) {
+        if (!e->e[i].used) continue;
+        struct file *f = fdt_get(t, e->e[i].fd);
+        if (!f) { e->e[i].used = 0; continue; }
+        u32 want = e->e[i].events, ready = (u32)file_poll_ready(f, (int)(want & 0x5) | 0x10 * 0);
+        u32 hup = ready & 0x10;
+        u32 rep = ready & want & 5;
+        if (want & EPOLLET_) {                                           /* edge: only what is new since the last report */
+            u32 gen = file_in_gen(f);
+            u32 in = (rep & 1) && gen != e->e[i].seen ? 1 : 0;
+            u32 outp = (rep & 4) && !e->e[i].out_done ? 4 : 0;
+            if (in) e->e[i].seen = gen;
+            if (outp) e->e[i].out_done = 1;
+            if (!(rep & 4)) e->e[i].out_done = 0;
+            rep = in | outp;
+            if (hup && !e->e[i].out_done) { rep |= 0x10; }
+        } else rep |= hup;
+        if (hup && (want & 0x2000)) rep |= 0x2000;
+        if (!rep) continue;
+        out[n].events = rep; out[n].data = e->e[i].data; n++;
+    }
+    return n;
 }
 
 /* ------------------------------------------------------------ fd tables */

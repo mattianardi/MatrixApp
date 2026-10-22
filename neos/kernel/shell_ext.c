@@ -219,6 +219,7 @@ static int fg_pid;
 int tty_pump(void)
 {
     int k, got = 0;
+    if (!fg_pid) return 0;                                      /* keys belong to the shell unless a foreground program is running */
     while ((k = key_poll()) >= 0) { got = 1; if (k == 3 && fg_pid) { proc_kill(fg_pid, 130); kprintf("^C\n"); } else if (k == 20) sched_dump(); else tty_feed(k); }
     return got;
 }

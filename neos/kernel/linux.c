@@ -1,4 +1,5 @@
 #include "proc.h"
+#include "sock.h"
 #include "fs.h"
 #include "agent.h"
 #include "neos_api.h"
@@ -81,6 +82,7 @@ static long stat_file(struct proc *p, struct file *f, u64 ust)
     switch (f->type) {
     case FT_INODE: case FT_DIR: return stat_inode(p, f->ino, ust);
     case FT_TTY: put_stat(st, S_IFCHR | 0620, 3, 0, vfs_now(), 0x500); break;
+    case FT_SOCK: put_stat(st, 0140000 | 0777, 5, 0, vfs_now(), 0); break;
     default: put_stat(st, S_IFIFO | 0600, 4, 0, vfs_now(), 0); break;
     }
     return copy_to_user(&p->as, ust, st, sizeof st) ? -E_FAULT : 0;
@@ -127,7 +129,7 @@ static long rw_user(struct proc *p, struct file *f, u64 ubuf, u64 len, int write
         }
         if (r < 0) { kfree(b); return total ? total : r; }
         total += r;
-        if ((size_t)r < c || f->type == FT_TTY || f->type == FT_PIPE_R) break;      /* short read / interactive: return what we have */
+        if ((size_t)r < c || f->type == FT_TTY || f->type == FT_PIPE_R || f->type == FT_SOCK || f->type == FT_EVENTFD) break;      /* short read / interactive: return what we have */
     }
     kfree(b);
     return total;
@@ -328,6 +330,11 @@ static long sys_ioctl(struct proc *p, int fd, u64 req, u64 arg)
 {
     struct file *f = fdt_get(p->fds, fd);
     if (!f) return -E_BADF;
+    if (f->type == FT_SOCK) {
+        if (req == 0x5421) { int on = 0; if (copy_from_user(&p->as, &on, arg, 4)) return -E_FAULT; if (on) f->flags |= O_NONBLOCK; else f->flags &= ~O_NONBLOCK; return 0; }
+        if (req == 0x541B) { int n = sock_nread(f->sock); return copy_to_user(&p->as, arg, &n, 4) ? -E_FAULT : 0; }
+        return -E_NOTTY;
+    }
     if (f->type != FT_TTY) return -E_NOTTY;
     switch (req) {
     case 0x5401: {                                                         /* TCGETS: a cooked, echoing terminal */
@@ -379,6 +386,166 @@ static int proc_hook(const char *path, char *buf, size_t n)
     }
     if (!strcmp(path, "/proc/self/stat") && p) return ksnprintf(buf, n, "%d (%s) R %d 0 0 0 0 0 0 0 0 0 0 0 0 0 20 0 %d 0 0 0 0\n", p->pid, p->name, p->ppid, p->nthreads);
     return -1;
+}
+
+/* ------------------------------------------------------------ sockets, epoll, eventfd (IPv4 TCP/UDP over the kernel stack) */
+#define SOCK_NONBLOCK_ 04000
+#define SOCK_CLOEXEC_ 02000000
+#define MSG_DONTWAIT_ 0x40
+
+static struct sock *fd_sock(struct proc *p, int fd, struct file **fo)
+{
+    struct file *f = fdt_get(p->fds, fd);
+    if (!f || f->type != FT_SOCK) return NULL;
+    if (fo) *fo = f;
+    return f->sock;
+}
+
+static long get_sockaddr(struct proc *p, u64 ua, u64 len, u32 *ip, u16 *port)
+{
+    u8 sa[16];
+    if (len < 8) return -E_INVAL;
+    if (copy_from_user(&p->as, sa, ua, 16 < len ? 16 : len)) return -E_FAULT;
+    if (*(u16 *)sa != 2) return -97;                                    /* EAFNOSUPPORT: IPv4 only */
+    *port = (u16)(sa[2] << 8 | sa[3]); *ip = (u32)sa[4] << 24 | (u32)sa[5] << 16 | (u32)sa[6] << 8 | sa[7];
+    return 0;
+}
+static long put_sockaddr(struct proc *p, u64 ua, u64 ulen, u32 ip, u16 port)
+{
+    if (!ua || !ulen) return 0;
+    u8 sa[16]; memset(sa, 0, 16);
+    *(u16 *)sa = 2; sa[2] = (u8)(port >> 8); sa[3] = (u8)port; sa[4] = (u8)(ip >> 24); sa[5] = (u8)(ip >> 16); sa[6] = (u8)(ip >> 8); sa[7] = (u8)ip;
+    u32 have = 0; if (copy_from_user(&p->as, &have, ulen, 4)) return -E_FAULT;
+    if (copy_to_user(&p->as, ua, sa, have < 16 ? have : 16)) return -E_FAULT;
+    u32 n = 16; return copy_to_user(&p->as, ulen, &n, 4) ? -E_FAULT : 0;
+}
+
+static long new_sock_fd(struct proc *p, struct sock *s, int flags)
+{
+    struct file *f = file_new(FT_SOCK, flags & SOCK_NONBLOCK_ ? O_NONBLOCK | 2 : 2);
+    if (!f) { sock_free(s); return -E_NOMEM; }
+    f->sock = s;
+    long fd = fdt_install(p->fds, f, 0, (flags & SOCK_CLOEXEC_) != 0);
+    if (fd < 0) file_put(f);
+    return fd;
+}
+
+static long sys_socket(struct proc *p, int domain, int type, int proto)
+{
+    (void)proto;
+    if (domain != 2) return -97;                                        /* AF_INET only (AF_UNIX / AF_INET6: EAFNOSUPPORT, callers fall back) */
+    int t = type & 0xF;
+    if (t != 1 && t != 2) return -94;                                   /* ESOCKTNOSUPPORT */
+    struct sock *s = sock_new(t == 1 ? SOCK_STREAM_ : SOCK_DGRAM_);
+    return s ? new_sock_fd(p, s, type) : -E_NOMEM;
+}
+
+static long sys_sendto(struct proc *p, int fd, u64 ubuf, u64 len, int flags, u64 uaddr, u64 alen)
+{
+    (void)flags;
+    struct sock *s = fd_sock(p, fd, NULL); if (!s) return fdt_get(p->fds, fd) ? -88 : -E_BADF;
+    u32 ip = 0; u16 port = 0; int hasd = 0;
+    if (uaddr) { long r = get_sockaddr(p, uaddr, alen, &ip, &port); if (r) return r; hasd = 1; }
+    size_t chunk = len < 32768 ? len : 32768; if (!chunk) return sock_send(s, "", 0, hasd, ip, port);
+    u8 *b = kmalloc(chunk); if (!b) return -E_NOMEM;
+    long total = 0;
+    while ((u64)total < len) {
+        size_t c = len - (u64)total < chunk ? len - (u64)total : chunk;
+        if (copy_from_user(&p->as, b, ubuf + (u64)total, c)) { kfree(b); return total ? total : -E_FAULT; }
+        long r = sock_send(s, b, c, hasd, ip, port);
+        if (r < 0) { kfree(b); return total ? total : r; }
+        total += r;
+        if (!sock_is_stream(s)) break;
+    }
+    kfree(b);
+    return total;
+}
+
+static long sys_recvfrom(struct proc *p, int fd, u64 ubuf, u64 len, int flags, u64 uaddr, u64 ualen)
+{
+    struct file *f; struct sock *s = fd_sock(p, fd, &f); if (!s) return fdt_get(p->fds, fd) ? -88 : -E_BADF;
+    size_t c = len < 32768 ? len : 32768; u8 *b = kmalloc(c ? c : 1); if (!b) return -E_NOMEM;
+    u32 sip = 0; u16 sport = 0;
+    long r = sock_recv(s, b, c, (f->flags & O_NONBLOCK) || (flags & MSG_DONTWAIT_), &sip, &sport);
+    if (r > 0 && copy_to_user(&p->as, ubuf, b, (size_t)r)) r = -E_FAULT;
+    kfree(b);
+    if (r >= 0 && uaddr) { long e = put_sockaddr(p, uaddr, ualen, sip, sport); if (e) return e; }
+    return r;
+}
+
+struct umsghdr { u64 name; u32 namelen, pad; u64 iov; u64 iovlen; u64 ctl; u64 ctllen; int flags; };
+static long sys_sendmsg(struct proc *p, int fd, u64 umsg, int flags)
+{
+    struct umsghdr m; if (copy_from_user(&p->as, &m, umsg, sizeof m)) return -E_FAULT;
+    if (m.iovlen > 16) return -E_INVAL;
+    u8 *b = kmalloc(32768); if (!b) return -E_NOMEM;
+    size_t tot = 0;
+    for (u64 i = 0; i < m.iovlen; i++) {
+        u64 iv[2]; if (copy_from_user(&p->as, iv, m.iov + i * 16, 16)) { kfree(b); return -E_FAULT; }
+        if (tot + iv[1] > 32768) iv[1] = 32768 - tot;
+        if (iv[1] && copy_from_user(&p->as, b + tot, iv[0], iv[1])) { kfree(b); return -E_FAULT; }
+        tot += iv[1];
+    }
+    u32 ip = 0; u16 port = 0; int hasd = 0;
+    struct sock *s = fd_sock(p, fd, NULL);
+    long r;
+    if (!s) r = fdt_get(p->fds, fd) ? -88 : -E_BADF;
+    else if (m.name && m.namelen && (r = get_sockaddr(p, m.name, m.namelen, &ip, &port)) != 0) { }
+    else { hasd = m.name != 0; r = sock_send(s, b, tot, hasd, ip, port); }
+    (void)flags; kfree(b);
+    return r;
+}
+static long sys_recvmsg(struct proc *p, int fd, u64 umsg, int flags)
+{
+    struct umsghdr m; if (copy_from_user(&p->as, &m, umsg, sizeof m)) return -E_FAULT;
+    if (m.iovlen > 16) return -E_INVAL;
+    struct file *f; struct sock *s = fd_sock(p, fd, &f); if (!s) return fdt_get(p->fds, fd) ? -88 : -E_BADF;
+    u8 *b = kmalloc(32768); if (!b) return -E_NOMEM;
+    u32 sip = 0; u16 sport = 0;
+    long r = sock_recv(s, b, 32768, (f->flags & O_NONBLOCK) || (flags & MSG_DONTWAIT_), &sip, &sport);
+    if (r > 0) {
+        size_t off = 0;
+        for (u64 i = 0; i < m.iovlen && off < (size_t)r; i++) {
+            u64 iv[2]; if (copy_from_user(&p->as, iv, m.iov + i * 16, 16)) { r = -E_FAULT; break; }
+            size_t c = (size_t)r - off < iv[1] ? (size_t)r - off : iv[1];
+            if (c && copy_to_user(&p->as, iv[0], b + off, c)) { r = -E_FAULT; break; }
+            off += c;
+        }
+        if (m.name && m.namelen >= 16) { u8 sa[16]; memset(sa, 0, 16); *(u16 *)sa = 2; sa[2] = (u8)(sport >> 8); sa[3] = (u8)sport; sa[4] = (u8)(sip >> 24); sa[5] = (u8)(sip >> 16); sa[6] = (u8)(sip >> 8); sa[7] = (u8)sip; copy_to_user(&p->as, m.name, sa, 16); }
+        u32 nl = 16, zero = 0; copy_to_user(&p->as, umsg + 8, &nl, 4); copy_to_user(&p->as, umsg + 40, &zero, 8); copy_to_user(&p->as, umsg + 48, &zero, 4);
+    }
+    kfree(b);
+    return r;
+}
+
+static long sys_sockopt(struct proc *p, int fd, int level, int opt, u64 uval, u64 ulen, int get)
+{
+    struct sock *s = fd_sock(p, fd, NULL); if (!s) return fdt_get(p->fds, fd) ? -88 : -E_BADF;
+    if (!get) return 0;                                                 /* options are accepted and ignored */
+    int v = 0;
+    if (level == 1 && opt == 3) v = sock_is_stream(s) ? 1 : 2;          /* SO_TYPE */
+    else if (level == 1 && (opt == 7 || opt == 8)) v = 65536;           /* SO_SNDBUF / SO_RCVBUF */
+    u32 n = 4; if (!uval || !ulen) return -E_FAULT;
+    if (copy_to_user(&p->as, uval, &v, 4) || copy_to_user(&p->as, ulen, &n, 4)) return -E_FAULT;
+    return 0;
+}
+
+static long sys_epoll_wait(struct proc *p, int epfd, u64 uev, int max, long timeout_ms)
+{
+    struct file *ep = fdt_get(p->fds, epfd);
+    if (!ep || ep->type != FT_EPOLL) return -E_BADF;
+    if (max <= 0) return -E_INVAL;
+    if (max > 64) max = 64;
+    struct epoll_ev ev[64];
+    u64 deadline = timeout_ms < 0 ? ~0ull : ticks + ms_to_ticks((u64)timeout_ms);
+    for (;;) {
+        int n = epoll_collect(ep, p->fds, ev, max);
+        if (n) return copy_to_user(&p->as, uev, ev, (size_t)n * sizeof(struct epoll_ev)) ? -E_FAULT : n;
+        if (timeout_ms == 0 || (deadline != ~0ull && ticks >= deadline)) return 0;
+        extern int tty_pump(void);
+        tty_pump();
+        thread_sleep_ms(1);
+    }
 }
 
 /* ------------------------------------------------------------ the dispatcher */
@@ -443,6 +610,34 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 19: RET(sys_readv(p, (int)a0, a1, (long)a2, 0));
     case 20: RET(sys_readv(p, (int)a0, a1, (long)a2, 1));
     case 7:  RET(sys_poll(p, a0, a1, (int)a2));
+    case 41: RET(sys_socket(p, (int)a0, (int)a1, (int)a2));
+    case 42: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 ip; u16 pt; if ((r = get_sockaddr(p, a1, a2, &ip, &pt))) RET(r); RET(sock_connect(sk, ip, pt)); }
+    case 49: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 ip; u16 pt; if ((r = get_sockaddr(p, a1, a2, &ip, &pt))) RET(r); RET(sock_bind(sk, ip, pt)); }
+    case 50: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); RET(sock_listen(sk, (int)a1)); }
+    case 43: case 288: {
+        struct file *lf; struct sock *sk = fd_sock(p, (int)a0, &lf); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF);
+        struct sock *ns; r = sock_accept(sk, (lf->flags & O_NONBLOCK) != 0, &ns); if (r) RET(r);
+        u32 lip, rip; u16 lp, rp; sock_names(ns, &lip, &lp, &rip, &rp);
+        if (a1 && (r = put_sockaddr(p, a1, a2, rip, rp))) { sock_free(ns); RET(r); }
+        RET(new_sock_fd(p, ns, nr == 288 ? (int)a3 : 0));
+    }
+    case 44: RET(sys_sendto(p, (int)a0, a1, a2, (int)a3, a4, a5));
+    case 45: RET(sys_recvfrom(p, (int)a0, a1, a2, (int)a3, a4, a5));
+    case 46: RET(sys_sendmsg(p, (int)a0, a1, (int)a2));
+    case 47: RET(sys_recvmsg(p, (int)a0, a1, (int)a2));
+    case 307: { long done = 0; for (u64 i = 0; i < a2; i++) { long q = sys_sendmsg(p, (int)a0, a1 + i * 64, (int)a3); if (q < 0) { if (!done) RET(q); break; } copy_to_user(&p->as, a1 + i * 64 + 56, &q, 4); done++; } RET(done); }
+    case 299: { long q = sys_recvmsg(p, (int)a0, a1, (int)a3 | MSG_DONTWAIT_ * 0); if (q < 0) RET(q); copy_to_user(&p->as, a1 + 56, &q, 4); RET(1); }
+    case 48: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); RET(sock_shutdown(sk, (int)a1)); }
+    case 51: case 52: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 lip, rip; u16 lp, rp; sock_names(sk, &lip, &lp, &rip, &rp); if (nr == 52 && !rp) RET(-107); RET(nr == 51 ? put_sockaddr(p, a1, a2, lip, lp) : put_sockaddr(p, a1, a2, rip, rp)); }
+    case 54: RET(sys_sockopt(p, (int)a0, (int)a1, (int)a2, a3, a4, 0));
+    case 55: RET(sys_sockopt(p, (int)a0, (int)a1, (int)a2, a3, a4, 1));
+    case 37: RET(0);                                                      /* alarm: no SIGALRM delivery yet */
+    case 53: RET(-97);                                                    /* socketpair: AF_UNIX is not supported */
+    case 213: case 291: { struct file *ef = file_new(FT_EPOLL, 2); if (!ef) RET(-E_NOMEM); ef->ep = kmalloc(1024); if (!ef->ep) { kfree(ef); RET(-E_NOMEM); } memset(ef->ep, 0, 1024); r = fdt_install(p->fds, ef, 0, nr == 291 && (a0 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }
+    case 233: { struct file *ef = fdt_get(p->fds, (int)a0); if (!ef || ef->type != FT_EPOLL) RET(-E_BADF); struct epoll_ev ev = { 0, 0 }; if (a1 != 2 && copy_from_user(&p->as, &ev, a3, sizeof ev)) RET(-E_FAULT); RET(epoll_ctl_op(ef, p->fds, (int)a1, (int)a2, ev.events, ev.data)); }
+    case 232: case 281: RET(sys_epoll_wait(p, (int)a0, a1, (int)a2, (int)a3));
+    case 284: case 290: { struct file *ef = file_new(FT_EVENTFD, (nr == 290 && (a1 & SOCK_NONBLOCK_)) ? O_NONBLOCK | 2 : 2); if (!ef) RET(-E_NOMEM); ef->evcount = a0; r = fdt_install(p->fds, ef, 0, nr == 290 && (a1 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }
+
     case 271: { long to = -1; if (a2) { u64 ts[2]; if (copy_from_user(&p->as, ts, a2, 16)) RET(-E_FAULT); to = (long)(ts[0] * 1000 + ts[1] / 1000000); } RET(sys_poll(p, a0, a1, to)); }
     case 9:  RET(sys_mmap(p, a0, a1, (int)a2, (int)a3, (long)(int)a4, a5));
     case 10: RET(vm_mprotect(&p->as, a0, a1, (int)a2) ? -E_NOMEM : 0);

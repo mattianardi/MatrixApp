@@ -18,7 +18,10 @@ static const u8 bcast[6] = { 255, 255, 255, 255, 255, 255 };
 static struct { u32 ip; u8 mac[6]; int valid; } arpc[8];
 static int arp_next;
 
-static struct { u16 port; udp_cb cb; } udps[6];
+static void ip_deliver(u32 src, u8 proto, const u8 *pl, int pn);
+#define NUDP 24
+static struct { u16 port; udp_cb cb; udp_cb2 cb2; void *ctx; } udps[NUDP];
+int tcp_rx_loopback;
 
 /* ping state */
 static volatile int ping_wait;
@@ -132,9 +135,37 @@ static int ip_tx_mac(const u8 *dmac, u32 src, u32 dst, u8 proto, const u8 *paylo
     return eth_send(dmac, 0x0800, pkt, (int)sizeof *h + len);
 }
 
+/* packets to ourselves (127.0.0.0/8 or our own address) never touch the wire: they are queued and delivered by the network thread */
+#define LOQ 32
+static struct { u32 src; u8 proto; int len; u8 data[1480]; } loq[LOQ];
+static volatile u32 lo_h, lo_t;
+static int ip_is_local(u32 ip) { return (ip >> 24) == 127 || (my_ip && ip == my_ip); }
+static int lo_enqueue(u32 dst, u8 proto, const u8 *payload, int len)
+{
+    if (len > 1480) return -1;
+    u64 fl = irq_save();
+    if (lo_h - lo_t >= LOQ) { irq_restore(fl); return -1; }
+    u32 i = lo_h % LOQ;
+    loq[i].src = dst; loq[i].proto = proto; loq[i].len = len; memcpy(loq[i].data, payload, len);
+    lo_h++;
+    irq_restore(fl);
+    return 0;
+}
+static void lo_drain(void)
+{
+    while (lo_t != lo_h) {
+        u32 i = lo_t % LOQ;
+        tcp_rx_loopback = 1;
+        ip_deliver(loq[i].src, loq[i].proto, loq[i].data, loq[i].len);
+        tcp_rx_loopback = 0;
+        lo_t++;
+    }
+}
+
 int ip_tx(u32 dst, u8 proto, const u8 *payload, int len)
 {
     u8 mac[6];
+    if (ip_is_local(dst)) return lo_enqueue(dst, proto, payload, len);
     if (!net_up()) return -1;
     if (resolve_mac(dst, mac)) return -1;
     return ip_tx_mac(mac, my_ip, dst, proto, payload, len);
@@ -152,9 +183,19 @@ int udp_send(u32 dst, u16 sport, u16 dport, const u8 *data, int len)
 
 int udp_bind(u16 port, udp_cb cb)
 {
-    for (int i = 0; i < 6; i++) if (!udps[i].port || udps[i].port == port) { udps[i].port = port; udps[i].cb = cb; return 0; }
+    for (int i = 0; i < NUDP; i++) if (!udps[i].port || udps[i].port == port) { udps[i].port = port; udps[i].cb = cb; udps[i].cb2 = NULL; return 0; }
     return -1;
 }
+int udp_bind_ctx(u16 port, udp_cb2 cb, void *ctx)
+{
+    u64 fl = irq_save(); int r = -1;
+    for (int i = 0; i < NUDP; i++) if (udps[i].port == port) { irq_restore(fl); return -1; }           /* in use */
+    for (int i = 0; i < NUDP; i++) if (!udps[i].port) { udps[i].cb = NULL; udps[i].cb2 = cb; udps[i].ctx = ctx; udps[i].port = port; r = 0; break; }
+    irq_restore(fl);
+    return r;
+}
+void udp_unbind(u16 port) { for (int i = 0; i < NUDP; i++) if (udps[i].port == port) { udps[i].port = 0; udps[i].cb = NULL; udps[i].cb2 = NULL; } }
+u16 udp_ephemeral(void) { static u16 next = 40000; for (;;) { u16 p = next++; if (next < 40000) next = 40000; int used = 0; for (int i = 0; i < NUDP; i++) if (udps[i].port == p) used = 1; if (!used) return p; } }
 
 /* ---- receive ---- */
 static void rx_arp(const u8 *p, int len)
@@ -193,6 +234,26 @@ static void rx_icmp(u32 src, const u8 *p, int len)
     }
 }
 
+static void ip_deliver(u32 src, u8 proto, const u8 *pl, int pn)
+{
+    switch (proto) {
+    case 1: rx_icmp(src, pl, pn); break;
+    case 6: tcp_input(src, pl, pn); break;
+    case 17:
+        if (pn >= (int)sizeof(struct udp)) {
+            const struct udp *u = (const void *)pl;
+            int ul = be16(u->len); if (ul > pn || ul < (int)sizeof *u) return;
+            n_udp_rx++;
+            for (int i = 0; i < NUDP; i++) if (udps[i].port == be16(u->dport)) {
+                if (udps[i].cb2) udps[i].cb2(udps[i].ctx, src, be16(u->sport), pl + sizeof *u, ul - (int)sizeof *u);
+                else if (udps[i].cb) udps[i].cb(src, be16(u->sport), pl + sizeof *u, ul - (int)sizeof *u);
+                break;
+            }
+        }
+        break;
+    }
+}
+
 static void rx_ip(const u8 *p, int len)
 {
     if (len < (int)sizeof(struct ip)) return;
@@ -204,19 +265,7 @@ static void rx_ip(const u8 *p, int len)
     int mine = !my_ip || dst == my_ip || dst == 0xFFFFFFFF || (my_ip && dst == (my_ip | ~my_mask));
     if (!mine) return;
     n_ip_rx++;
-    const u8 *pl = p + hl; int pn = tl - hl;
-    switch (h->proto) {
-    case 1: rx_icmp(src, pl, pn); break;
-    case 6: tcp_input(src, pl, pn); break;
-    case 17:
-        if (pn >= (int)sizeof(struct udp)) {
-            const struct udp *u = (const void *)pl;
-            int ul = be16(u->len); if (ul > pn || ul < (int)sizeof *u) return;
-            n_udp_rx++;
-            for (int i = 0; i < 6; i++) if (udps[i].port == be16(u->dport)) { udps[i].cb(src, be16(u->sport), pl + sizeof *u, ul - (int)sizeof *u); break; }
-        }
-        break;
-    }
+    ip_deliver(src, h->proto, p + hl, tl - hl);
 }
 
 static void rx_frame(const u8 *f, int len)
@@ -233,6 +282,7 @@ static void net_thread(void *arg)
     (void)arg;
     for (;;) {
         e1000_poll(rx_frame);
+        lo_drain();
         tcp_tick();
         thread_sleep_ms((u64)t_poll->val);
     }

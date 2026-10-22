@@ -110,6 +110,10 @@ arriva dal bus di variabili nella forma Windows. Verificato con eseguibili compi
 scrive un file che Linux legge, un altro lancia un figlio con pipe, una variabile impostata in un mondo appare
 convertita nell'altro. Un'API non implementata viene segnalata solo se il programma la chiama davvero.
 
+**Rete per i programmi Linux**: `socket/bind/listen/accept/connect/send/recv` (TCP e UDP su IPv4, anche verso `127.0.0.1`),
+`poll`, `epoll` (anche edge-triggered) ed `eventfd`. Verificato con glibc (client/server in loopback, UDP, `getaddrinfo`),
+ BusyBox `wget` e con un server **Go `net/http` non modificato** che gira dentro NEOS e viene mostrato dal browser di NEOS.
+
 ## Nio, il linguaggio di NEOS
 
 `lang/nio.c` (interprete in C, gira su host e su NEOS): valori `nil/bool/int/float/str/list/map/fn`, closure,
@@ -171,7 +175,7 @@ persistenza su disco, workspace grafico e browser.
 | Area | Stato |
 |---|---|
 | TLS / HTTPS / firme dei pacchetti | non c'è: HTTP + SHA-256 + pin dell'indice |
-| Socket per programmi Linux (`socket/connect`, epoll) | non ancora: la rete è usata dal kernel (HTTP, pacchetti) e dal browser |
+| Rete per programmi Linux | socket IPv4 TCP/UDP (client e server, loopback), `epoll`, `eventfd`, `getaddrinfo` (`/etc/hosts`, `/etc/resolv.conf`); niente IPv6, socket Unix, raw socket |
 | Gestori di segnale (`sigaction`) per processi Linux | non consegnati: valgono le azioni predefinite |
 | Windows: solo PE64 con API Win32 di base | niente GUI Win32, DirectX, servizi, registro completo, PE a 32 bit |
 | Browser: niente JavaScript/CSS/HTTPS | le web-app moderne con JS non funzionano |

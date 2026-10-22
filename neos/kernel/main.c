@@ -81,6 +81,9 @@ static void init_thread(void *arg)
     load_initrd();
     neofs_load();
     install_applets();
+    fs_write("/etc/hosts", "127.0.0.1 localhost\n10.0.2.2 host\n", 34);
+    fs_write("/etc/nsswitch.conf", "hosts: files dns\n", 18);
+    fs_write("/etc/resolv.conf", "nameserver 10.0.2.3\n", 20);
     if (t_test->val) { int rc = selftest_run(); qemu_exit(rc ? 0x11 : 0x10); }
     agentd_start();
     neofs_start();

@@ -19,7 +19,7 @@ QEMU = qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -initrd $(BUILD)/initrd.
 USER_CFLAGS := -O2 -Wall -ffreestanding -fno-stack-protector -nostdlib -static -mno-avx -fno-asynchronous-unwind-tables \
                -Wl,--build-id=none -Wl,-z,max-page-size=4096
 USER_PROGS  := hello hello-pie crash spin
-LINUX_BINS  := hello_glibc fileio forkpipe threads hello_musl hello_rs hello_go
+LINUX_BINS  := hello_glibc fileio forkpipe threads hello_musl hello_rs hello_go netcheck webserver
 LINUX_CC    := gcc -O2 -static -fno-pie -no-pie
 
 all: $(BUILD)/matrix32.elf $(BUILD)/initrd.npk
@@ -48,6 +48,9 @@ $(BUILD)/linux/hello_rs: linuxtests/hello_rs.rs | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	rustc -O --target x86_64-unknown-linux-musl -C target-feature=+crt-static $< -o $@
 $(BUILD)/linux/hello_go: linuxtests/hello_go.go | $(BUILD)
+	@mkdir -p $(BUILD)/linux
+	CGO_ENABLED=0 go build -o $@ $<
+$(BUILD)/linux/webserver: linuxtests/webserver.go | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	CGO_ENABLED=0 go build -o $@ $<
 $(BUILD)/linux/nio: lang/nio.c | $(BUILD)
@@ -106,6 +109,7 @@ test: all
 	@$(MAKE) --no-print-directory agenttest
 	@$(MAKE) --no-print-directory guitest
 	@$(MAKE) --no-print-directory browsertest
+	@$(MAKE) --no-print-directory netappstest
 	@$(MAKE) --no-print-directory disktest
 
 shelltest: all
@@ -129,6 +133,9 @@ niotest: all
 aihtest: all
 	@python3 tools/check-aih.py | tail -1
 
+netappstest: all
+	@python3 tools/check-netapps.py | tail -1
+
 browsertest: all
 	@python3 tools/check-browser.py | tail -1
 
@@ -144,4 +151,4 @@ agenttest: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest disktest clean
+.PHONY: all run test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest disktest clean
