@@ -44,7 +44,13 @@ for name in ["libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2", "librt.s
         if os.path.exists(p):
             gfiles["/lib/x86_64-linux-gnu/" + name] = open(os.path.realpath(p), "rb").read(); break
 gl = subprocess.run(["ldd", "--version"], capture_output=True, text=True).stdout.splitlines()[0].split()[-1]
-open(os.path.join(out, f"glibc-{gl}.npk"), "wb").write(npk(gfiles, {"name": "glibc", "version": gl, "description": "glibc loader + runtime libraries: runs dynamically linked Linux programs"}))
+open(os.path.join(out, "glibc.npk"), "wb").write(npk(gfiles, {"name": "glibc", "version": gl, "description": "glibc loader + runtime libraries: runs dynamically linked Linux programs"}))
+
+# ---- CA certificates (HTTPS for Python / pip: OpenSSL inside the python package verifies server certificates against these)
+ca = "/etc/ssl/certs/ca-certificates.crt"
+if os.path.exists(ca):
+    d = open(ca, "rb").read()
+    open(os.path.join(out, "ca-certificates.npk"), "wb").write(npk({"/etc/ssl/certs/ca-certificates.crt": d}, {"name": "ca-certificates", "version": "2026", "description": "trusted root certificates (copied from the build host)"}))
 
 # ---- python
 files = {}
@@ -88,5 +94,5 @@ files[f"local/lib/python{PYVER}/dist-packages/README.txt"] = b"pip installs pack
 files["bin/pip"] = b"#!/opt/python3/bin/python3\nimport sys\nfrom pip._internal.cli.main import main\nsys.exit(main())\n"
 files["bin/pip3"] = files["bin/pip"]
 pv = subprocess.run([PYBIN, "--version"], capture_output=True, text=True).stdout.split()[-1]
-open(os.path.join(out, f"python3-{pv}.npk"), "wb").write(npk(files, {"name": "python3", "version": pv, "description": "CPython + pip + stdlib + the neos module (tools, settings, packages)", "depends": "glibc"}))
+open(os.path.join(out, "python3.npk"), "wb").write(npk(files, {"name": "python3", "version": pv, "description": "CPython + pip + stdlib + the neos module (tools, settings, packages)", "depends": "glibc,ca-certificates" if os.path.exists(ca) else "glibc"}))
 print("built", sorted(os.listdir(out)), {k: len(v) for k, v in [("python files", files)]})

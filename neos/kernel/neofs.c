@@ -212,7 +212,7 @@ void neofs_init(void)
 {
     module_register("neofs", "1.0", "durable storage: ATA disk, crash-safe double-slot snapshots of the persistent roots");
     t_on    = tune_bool("neofs", "enable", "write snapshots to the disk", TF_LIVE, 1, NULL);
-    t_roots = tune_str ("neofs", "roots", "directories kept on the disk (space separated)", TF_LIVE, "/data /home /root /opt /var /mnt/c /etc/neos", NULL);
+    t_roots = tune_str ("neofs", "roots", "directories kept on the disk (space separated)", TF_LIVE, "/data /home /root /opt /var /mnt/c /etc/neos /etc/ssl /lib64 /lib/x86_64-linux-gnu", NULL);
     t_sync  = tune_int ("neofs", "sync_s", "automatic snapshot period in seconds (0 = only on `disk sync` and shutdown)", TF_LIVE, 5, 0, 3600, NULL);
     t_max   = tune_int ("neofs", "max_mb", "largest snapshot accepted (MiB)", TF_LIVE, 16, 1, 128, NULL);
     present = ata_init() == 0;

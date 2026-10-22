@@ -3,6 +3,7 @@
 . /lib/neos/pkg/common.sh
 sub=$1; shift; spec="$*"
 PY=/opt/python3/bin/python3
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt PIP_CERT=/etc/ssl/certs/ca-certificates.crt     # HTTPS is verified by OpenSSL inside the python package
 if [ ! -x $PY ]; then
   say "python3 is not installed yet: installing it from the package cache first"
   neosctl pkg.update >/dev/null 2>&1
@@ -25,5 +26,6 @@ case $sub in
     $PY -m pip uninstall -y $spec || exit 1
     for n in $spec; do rm -f "/var/pkg/pip:$n"; done
     ;;
+  run) $PY -m pip $spec; rc=$?; sync_records; exit $rc ;;
   *) die "usage: pkg install|remove pip:..." ;;
 esac

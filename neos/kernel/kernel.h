@@ -137,7 +137,7 @@ struct tunable {
     char name[40]; const char *module; const char *desc;
     u8 type, flags;
     i64 val, pending, def, min, max;
-    char sval[48], spend[48];
+    char sval[128], spend[128];
     int has_pending;
     tune_cb cb;
 };

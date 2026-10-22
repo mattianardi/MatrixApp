@@ -13,7 +13,11 @@ AGENT_CHAN ?= -serial unix:$(BUILD)/agent.sock,server,nowait
 NIC ?= -nic user,model=e1000
 DISK ?=
 KARGS ?=
-QEMU = qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -initrd $(BUILD)/initrd.npk -m 512 -display none -append "$(KARGS)" \
+# Optional offline package cache: Python 3 + glibc runtime + CA certificates, built from the build host (PYBUNDLE=0 to skip)
+PYBUNDLE ?= $(shell python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null && ldd $$(readlink -f $$(which python3)) >/dev/null 2>&1 && echo 1 || echo 0)
+CACHE_NPK := $(if $(filter 1,$(PYBUNDLE)),$(BUILD)/pycache/glibc.npk $(BUILD)/pycache/ca-certificates.npk $(BUILD)/pycache/python3.npk)
+INITRD_ARG = $(BUILD)/initrd.npk$(foreach f,$(CACHE_NPK),,$(f))
+QEMU = qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -initrd $(INITRD_ARG) -m 512 -display none -append "$(KARGS)" \
         -cpu max -serial stdio $(AGENT_CHAN) -no-reboot $(NIC) $(DISK) -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 USER_CFLAGS := -O2 -Wall -ffreestanding -fno-stack-protector -nostdlib -static -mno-avx -fno-asynchronous-unwind-tables \
@@ -22,7 +26,10 @@ USER_PROGS  := hello hello-pie crash spin
 LINUX_BINS  := hello_glibc fileio forkpipe threads hello_musl hello_rs hello_go netcheck webserver sigtest spawntest
 LINUX_CC    := gcc -O2 -static -fno-pie -no-pie
 
-all: $(BUILD)/matrix32.elf $(BUILD)/initrd.npk
+all: $(BUILD)/matrix32.elf $(BUILD)/initrd.npk $(CACHE_NPK)
+
+$(BUILD)/pycache/python3.npk $(BUILD)/pycache/glibc.npk $(BUILD)/pycache/ca-certificates.npk: tools/mkpython.py userland/python/neos.py | $(BUILD)
+	python3 tools/mkpython.py $(BUILD)/pycache
 
 # user programs: hello is linked at 0x400000 (the classic non-PIE address), hello-pie is a static PIE (relocated by the loader)
 $(BUILD)/user/hello: user/hello.c user/neos.h kernel/neos_api.h | $(BUILD)
@@ -107,8 +114,8 @@ gui: all $(BUILD)/neos.disk
 # Bootable ISO (GRUB + multiboot): runs in QEMU, VirtualBox, VMware, or from a USB stick on a PC with BIOS boot.
 $(BUILD)/neos.iso: all
 	rm -rf $(BUILD)/iso && mkdir -p $(BUILD)/iso/boot/grub
-	cp $(BUILD)/matrix32.elf $(BUILD)/initrd.npk $(BUILD)/iso/boot/
-	printf 'set timeout=2\nset gfxpayload=1024x768x32\nmenuentry "NEOS" {\n  multiboot /boot/matrix32.elf\n  module /boot/initrd.npk\n}\n' > $(BUILD)/iso/boot/grub/grub.cfg
+	cp $(BUILD)/matrix32.elf $(BUILD)/initrd.npk $(CACHE_NPK) $(BUILD)/iso/boot/
+	printf 'set timeout=2\nset gfxpayload=1024x768x32\nmenuentry "NEOS" {\n  multiboot /boot/matrix32.elf\n  module /boot/initrd.npk\n$(foreach f,$(CACHE_NPK),  module /boot/$(notdir $(f))\n)}\n' > $(BUILD)/iso/boot/grub/grub.cfg
 	grub-mkrescue -o $@ $(BUILD)/iso 2>/dev/null
 iso: $(BUILD)/neos.iso
 run-iso: $(BUILD)/neos.iso $(BUILD)/neos.disk
@@ -116,6 +123,7 @@ run-iso: $(BUILD)/neos.iso $(BUILD)/neos.disk
 
 # Exit code 33 == kernel self-test passed (isa-debug-exit 0x10 -> (0x10<<1)|1).
 test: KARGS := neos.boot.test=1
+test: INITRD_ARG = $(BUILD)/initrd.npk
 test: all
 	@timeout 30 $(QEMU); rc=$$?; if [ $$rc -eq 33 ]; then echo "TEST OK"; else echo "TEST FAILED (rc=$$rc)"; exit 1; fi
 	@$(MAKE) --no-print-directory shelltest
@@ -129,6 +137,7 @@ test: all
 	@$(MAKE) --no-print-directory guitest
 	@$(MAKE) --no-print-directory browsertest
 	@$(MAKE) --no-print-directory netappstest
+	@$(MAKE) --no-print-directory pkgtest
 	@$(MAKE) --no-print-directory disktest
 
 shelltest: all
@@ -158,6 +167,9 @@ netappstest: all
 browsertest: all
 	@python3 tools/check-browser.py | tail -1
 
+pkgtest: all
+	@python3 tools/check-pkg.py | tail -1
+
 disktest: all
 	@tools/check-disk.sh
 
@@ -170,4 +182,4 @@ agenttest: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run gui iso run-iso test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest disktest clean
+.PHONY: all run gui iso run-iso test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest pkgtest disktest clean

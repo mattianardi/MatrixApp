@@ -470,3 +470,40 @@ int c_browse(int argc, char **argv, struct ctx *c)
 }
 
 int c_fontdump(int argc, char **argv, struct ctx *c) { (void)argc; (void)argv; (void)c; extern void gui_fontdump(void); gui_fontdump(); return 0; }
+
+/* Familiar front-ends: `pip install x`, `apt install x`, `dpkg -i f.deb` are the same registry operations as `pkg install <backend>:x`. */
+static int join_args(char *out, size_t n, int argc, char **argv, int from)
+{
+    out[0] = 0;
+    for (int i = from; i < argc; i++) { if (out[0]) strlcat(out, " ", n); strlcat(out, argv[i], n); }
+    return out[0] != 0;
+}
+int c_pip(int argc, char **argv, struct ctx *c)
+{
+    (void)c; char spec[200];
+    if (c->pure) return -1;
+    if (argc < 2) { err("usage: pip install|uninstall|list|show|freeze ... (python3 comes from the package cache on first use)"); return -1; }
+    if (!strcmp(argv[1], "install") && join_args(spec, sizeof spec, argc, argv, 2)) return run_backend("pip", "install", spec);
+    if (!strcmp(argv[1], "uninstall") && join_args(spec, sizeof spec, argc, argv, 2)) { char *a2[2]; (void)a2; return run_backend("pip", "remove", spec); }
+    join_args(spec, sizeof spec, argc, argv, 1);
+    return run_backend("pip", "run", spec);
+}
+int c_apt(int argc, char **argv, struct ctx *c)
+{
+    char spec[200];
+    if (c->pure) return -1;
+    if (argc < 2) { err("usage: apt update | install <pkg>... | remove <pkg> | search <text> | show <pkg>"); return -1; }
+    if (!strcmp(argv[1], "update")) return run_backend("apt", "install", "update");
+    if ((!strcmp(argv[1], "install") || !strcmp(argv[1], "remove") || !strcmp(argv[1], "search") || !strcmp(argv[1], "show")) && join_args(spec, sizeof spec, argc, argv, 2))
+        return run_backend("apt", argv[1], spec);
+    err("usage: apt update | install <pkg>... | remove <pkg> | search <text> | show <pkg>");
+    return -1;
+}
+int c_dpkg(int argc, char **argv, struct ctx *c)
+{
+    if (c->pure) return -1;
+    if (argc >= 3 && (!strcmp(argv[1], "-i") || !strcmp(argv[1], "--install"))) return run_backend("deb", "install", argv[2]);
+    if (argc >= 3 && (!strcmp(argv[1], "-r") || !strcmp(argv[1], "--remove"))) return run_backend("deb", "remove", argv[2]);
+    err("usage: dpkg -i <file.deb> | dpkg -r <name>");
+    return -1;
+}

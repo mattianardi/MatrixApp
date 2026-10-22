@@ -24,6 +24,9 @@ int c_sha256(int argc, char **argv, struct ctx *c);
 int c_disk(int argc, char **argv, struct ctx *c);
 int c_browse(int argc, char **argv, struct ctx *c);
 int c_fontdump(int argc, char **argv, struct ctx *c);
+int c_pip(int argc, char **argv, struct ctx *c);
+int c_apt(int argc, char **argv, struct ctx *c);
+int c_dpkg(int argc, char **argv, struct ctx *c);
 
 #define SHELL_EXT_CMDS \
     { "net",      "net [dhcp | set <ip> <mask> <gw> [dns]]", "network status / configure",   c_net,      1, 0 }, \
@@ -44,6 +47,11 @@ int c_fontdump(int argc, char **argv, struct ctx *c);
     { "lx",       "lx <cmd> [args]",           "run the Linux program /bin/<cmd> (even if NEOS has a built-in)", c_lx, 0, 0 }, \
     { "binfmt",   "binfmt [add .ext /interp [arg] | remove .ext]", "how files are started: extension -> interpreter", c_binfmt, 1, 0 }, \
     { "agent",    "agent [list|tools|add|grant|revoke|policy|pending|approve|deny|log|journal|rollback|freeze|call|tuner]", "AI agents: identities, capabilities, approvals, audit", c_agent, 1, 0 }, \
+    { "pip",      "pip install|uninstall|list|show <pkg>", "Python packages (same as `pkg install pip:<name>`)", c_pip, 0, 0 }, \
+    { "pip3",     "pip3 ...",                  "alias of pip",                               c_pip, 0, 0 }, \
+    { "apt",      "apt update|install|remove|search|show <pkg>", "Debian/Ubuntu packages with dependencies (same as `pkg install apt:<name>`)", c_apt, 0, 0 }, \
+    { "apt-get",  "apt-get ...",               "alias of apt",                               c_apt, 0, 0 }, \
+    { "dpkg",     "dpkg -i <file.deb> | -r <name>", "install/remove one .deb (same as `pkg install deb:<file>`)", c_dpkg, 0, 0 }, \
     { "fontdump", "fontdump",                  "print the 8x16 console font as hex (build tooling)", c_fontdump, 0, 0 }, \
     { "browse",   "browse <url>",              "open the browser window: http://, file://, neos://home|system|settings|agents|files", c_browse, 0, 0 }, \
     { "disk",     "disk [status|sync|format]",  "durable storage (NeoFS): status, snapshot now, wipe", c_disk, 0, 0 }, \

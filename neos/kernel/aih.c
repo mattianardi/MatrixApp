@@ -124,6 +124,10 @@ int aih_local_plan(const char *text, char *o, size_t n)
         STEP("neos", risk_of(c) == 2 ? "high" : risk_of(c) == 1 ? "medium" : "low", "%s", c);
         return 0;
     }
+    if (!strcmp(first, "pip") || !strcmp(first, "pip3") || !strcmp(first, "apt") || !strcmp(first, "apt-get") || !strcmp(first, "dpkg")) {
+        SAY("'%s' e' un comando di installazione Linux/Python: NEOS lo traduce nel suo gestore pacchetti (registro unico, verifica, persistenza).", first);
+        STEP("neos", "medium", "%s", text); return 0;
+    }
     static const char *const lin[] = { "grep", "egrep", "awk", "sed", "find", "cut", "sort", "uniq", "wc", "head", "tail", "tr", "xargs", "tee", "cp", "mv", "ln", "chmod", "touch", "mkdir", "date", "env", "uname", "id", "which", "basename", "dirname", "tar", "gzip", "diff", "od", "md5sum", "sha256sum", "seq", "sleep", "expr", "test", NULL };
     for (int i = 0; lin[i]; i++) if (!strcmp(first, lin[i])) {
         SAY("'%s' e' un comando Linux: lo eseguo con la shell Linux (BusyBox).", first);
@@ -153,7 +157,14 @@ int aih_local_plan(const char *text, char *o, size_t n)
     if (hasany(t, "installa|install|scarica il pacchetto|get package")) {
         const char *kw = has(t, "installa") ? "installa " : "install ";
         if (word_after(text, t, kw, w, sizeof w) || word_after(text, t, "pacchetto ", w, sizeof w) || word_after(text, t, "package ", w, sizeof w)) {
-            SAY("Aggiorno l'indice dei pacchetti e installo '%s' (verifica SHA-256; serve pkg.repo raggiungibile).", w);
+            size_t wl = strlen(w);
+            int isurl = !strncmp(w, "http://", 7) || !strncmp(w, "https://", 8) || w[0] == '/';
+            if (isurl && wl > 4 && !strcasecmp(w + wl - 4, ".deb")) { SAY("Pacchetto Debian: lo scarico e lo installo in /opt (dipendenze non risolte: usa apt per quelle)."); STEP("neos", "medium", "pkg install deb:%s", w); return 0; }
+            if (isurl && wl > 4 && !strcasecmp(w + wl - 4, ".whl")) { SAY("Wheel Python: lo installo con pip (python3 viene dalla cache offline se manca)."); STEP("neos", "medium", "pkg install pip:%s", w); return 0; }
+            if (isurl && (strstr(w, ".tar") || strstr(w, ".tgz") || strstr(w, ".zip"))) { SAY("Archivio: lo estraggo in /opt/<nome> e rendo raggiungibili i programmi in bin/."); STEP("neos", "medium", "pkg install tar:%s", w); return 0; }
+            if (hasany(t, "pip|python|pypi")) { SAY("Installo '%s' dal repository Python con pip (python3 viene dalla cache offline se manca).", w); STEP("neos", "medium", "pkg install pip:%s", w); return 0; }
+            if (hasany(t, "apt|debian|ubuntu| deb")) { SAY("Installo '%s' dagli archivi Debian/Ubuntu con le sue dipendenze (verifica SHA-256 dei pacchetti).", w); STEP("neos", "medium", "pkg install apt:update"); STEP("neos", "medium", "pkg install apt:%s", w); return 0; }
+            SAY("Aggiorno l'indice dei pacchetti e installo '%s' (verifica SHA-256; cache offline o pkg.repo).", w);
             STEP("neos", "medium", "pkg update"); STEP("neos", "medium", "pkg install %s", w); return 0;
         }
     }
