@@ -12,7 +12,7 @@ section .bss
 align 4096
 pml4:  resb 4096
 pdpt:  resb 4096
-pd:    resb 4096
+pd:    resb 4096 * 4          ; 4 page directories = 4 GiB
 align 16
 stack_bottom: resb 16384
 stack_top:
@@ -44,20 +44,34 @@ _start:
     push edi
     mov edi, pml4
     xor eax, eax
-    mov ecx, 3 * 1024
+    mov ecx, 6 * 1024
     rep stosd
     pop edi
 
     mov dword [pml4], pdpt + 3
-    mov dword [pdpt], pd + 3
+    xor ecx, ecx
+.pdpt:
+    mov eax, ecx
+    shl eax, 12
+    add eax, pd + 3
+    mov [pdpt + ecx * 8], eax
+    inc ecx
+    cmp ecx, 4
+    jne .pdpt
+
+    ; 2 MiB pages: RAM (first GiB) cached, everything above uncached (PCI MMIO)
     xor ecx, ecx
 .map:
     mov eax, ecx
     shl eax, 21
     or  eax, 0x83           ; present | writable | 2 MiB page
+    cmp ecx, 512
+    jb  .cached
+    or  eax, 0x18           ; PWT | PCD
+.cached:
     mov [pd + ecx * 8], eax
     inc ecx
-    cmp ecx, 512
+    cmp ecx, 2048
     jne .map
 
     mov eax, cr4

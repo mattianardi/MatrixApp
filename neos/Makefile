@@ -9,7 +9,8 @@ LDFLAGS := -T kernel/linker.ld -nostdlib -static -z max-page-size=0x1000
 CSRC := $(wildcard kernel/*.c)
 OBJS := $(BUILD)/boot.o $(BUILD)/isr.o $(patsubst kernel/%.c,$(BUILD)/%.o,$(CSRC))
 
-QEMU := qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -m 128 -display none \
+KARGS ?=
+QEMU = qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -m 128 -display none -append "$(KARGS)" \
         -serial stdio -no-reboot -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 all: $(BUILD)/matrix32.elf
@@ -34,10 +35,15 @@ run: all
 	$(QEMU)
 
 # Exit code 33 == kernel self-test passed (isa-debug-exit 0x10 -> (0x10<<1)|1).
+test: KARGS := neos.boot.test=1
 test: all
 	@timeout 30 $(QEMU); rc=$$?; if [ $$rc -eq 33 ]; then echo "TEST OK"; else echo "TEST FAILED (rc=$$rc)"; exit 1; fi
+	@$(MAKE) --no-print-directory shelltest
+
+shelltest: all
+	@tools/check-shell.sh
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test clean
+.PHONY: all run test shelltest clean

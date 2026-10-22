@@ -5,7 +5,7 @@
 
 extern char _kernel_end[];
 static u32 bitmap[MAX_PAGES / 32];      /* 1 = used */
-static size_t free_count;
+static size_t free_count, total_count;
 
 static void mark(u64 page, int used)
 {
@@ -20,7 +20,8 @@ struct mmap_entry { u32 size; u64 addr; u64 len; u32 type; } __attribute__((pack
 void pmm_init(const void *mbi)
 {
     for (size_t i = 0; i < MAX_PAGES / 32; i++) bitmap[i] = ~0u;
-    free_count = 0;
+    free_count = total_count = 0;
+    module_register("pmm", "1.0", "physical page allocator (bitmap)");
 
     const u32 *info = mbi;
     if (!(info[0] & (1 << 6))) panic("bootloader gave no memory map");
@@ -34,7 +35,7 @@ void pmm_init(const void *mbi)
             u64 a = e->addr > start ? e->addr : start, b = e->addr + e->len;
             if (b > (u64)MAX_PAGES * PAGE) b = (u64)MAX_PAGES * PAGE;
             for (a = (a + PAGE - 1) & ~(u64)(PAGE - 1); a + PAGE <= b; a += PAGE)
-                mark(a / PAGE, 0);
+                { mark(a / PAGE, 0); total_count++; }
         }
         p += e->size + 4;
     }
@@ -60,3 +61,4 @@ void pmm_free(u64 addr, size_t pages)
 }
 
 size_t pmm_free_pages(void) { return free_count; }
+size_t pmm_total_pages(void) { return total_count; }
