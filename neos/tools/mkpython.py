@@ -88,5 +88,5 @@ files[f"lib/python{PYVER}/site-packages/README.txt"] = b"pip installs packages h
 files["bin/pip"] = b"#!/opt/python3/bin/python3\nimport sys\nfrom pip._internal.cli.main import main\nsys.exit(main())\n"
 files["bin/pip3"] = files["bin/pip"]
 pv = subprocess.run([PYBIN, "--version"], capture_output=True, text=True).stdout.split()[-1]
-open(os.path.join(out, f"python3-{pv}.npk"), "wb").write(npk(files, {"name": "python3", "version": pv, "description": "CPython + pip + stdlib + the neos module (tools, settings, packages)"}))
+open(os.path.join(out, f"python3-{pv}.npk"), "wb").write(npk(files, {"name": "python3", "version": pv, "description": "CPython + pip + stdlib + the neos module (tools, settings, packages)", "depends": "glibc"}))
 print("built", sorted(os.listdir(out)), {k: len(v) for k, v in [("python files", files)]})

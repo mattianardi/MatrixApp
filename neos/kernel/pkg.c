@@ -262,9 +262,14 @@ int pkg_build(const char *name, const char *ver, const char *dir, char *outpath,
     return files;
 }
 
+static int npk_find(const u8 *d, size_t n, const char *want, const u8 **out, size_t *olen);
+static void kv(const char *text, size_t n, const char *key, char *out, size_t on);
+static int install_depth;
+
 int pkg_install(const char *name, const char **err)
 {
     struct pent *p = NULL;
+    if (!nidx) { const char *ue = ""; if (pkg_update(&ue)) { *err = ue; return -1; } }          /* first use: read the repositories */
     for (int i = 0; i < nidx; i++) if (!strcmp(idx[i].name, name)) p = &idx[i];
     if (!p) { *err = "unknown package (run `pkg update`, then `pkg list`)"; return -1; }
     if (check_transport(p->repo, err)) return -1;
@@ -274,6 +279,17 @@ int pkg_install(const char *name, const char **err)
     char h[65]; sha256_hex(b, n, h);
     if (n != p->size) { *err = "size differs from the index"; if (owned) kfree(b); return -1; }
     if (strcasecmp(h, p->sha)) { *err = "SHA-256 mismatch: package corrupted or tampered"; if (owned) kfree(b); return -1; }
+    const u8 *pi; size_t pl;                                                /* dependencies come first (".pkginfo": depends=a,b) */
+    if (!npk_find(b, n, ".pkginfo", &pi, &pl) && install_depth < 4) {
+        char deps[96]; kv((const char *)pi, pl, "depends", deps, sizeof deps);
+        for (char *d = deps; *d;) {
+            char *e = d; while (*e && *e != ',') e++;
+            int more = *e; *e = 0;
+            if (*d && !installed(d)) { install_depth++; char nm[24]; strlcpy(nm, d, sizeof nm); int r = pkg_install(nm, err); install_depth--; if (r) { if (owned) kfree(b); return -1; } }
+            if (!more) break;
+            d = e + 1;
+        }
+    }
     char origin[100]; ksnprintf(origin, sizeof origin, "npk %s", p->repo);
     int files = install_blob(p->name, p->ver, b, n, p->trusted || (int)t_syspaths->val, origin, err);
     if (owned) kfree(b);
