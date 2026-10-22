@@ -11,8 +11,10 @@
  * and every button is just a shortcut (Approve = `agent approve`, AI Help types `aih ` into the shell).
  * The renderer is immediate-mode: each frame rebuilds the list of clickable regions it draws.
  */
-#define SW 1024
-#define SH 768
+static int SW = 1024, SH = 768;                 /* screen size: 1024x768 unless the loader gave us another linear framebuffer */
+static u32 fb_pitch = 1024 * 4;                  /* bytes per scanline of the real framebuffer */
+extern const u32 *boot_mbi;
+#include "font8x16.h"
 #define PANEL_H 24
 #define TASK_H 34
 
@@ -52,7 +54,7 @@ static void font_from_vga(void)
 }
 
 /* ------------------------------------------------------------ drawing primitives (on bb) */
-static int clx0, cly0 = 0, clx1 = SW, cly1 = SH;                         /* clip rectangle (the browser viewport sets it) */
+static int clx0, cly0, clx1, cly1;                         /* clip rectangle (the browser viewport sets it) */
 static void px(int x, int y, u32 c) { if (x >= clx0 && x < clx1 && y >= cly0 && y < cly1) bb[y * SW + x] = c; }
 static void rect(int x, int y, int w, int h, u32 c)
 {
@@ -350,8 +352,10 @@ static void frame_draw(int mx, int my)
 
 static void flush(void)
 {
-    u64 *s = (u64 *)bb, *d = (u64 *)fb; size_t n = (size_t)SW * SH / 2;
-    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    for (int y = 0; y < SH; y++) {
+        u64 *d = (u64 *)((u8 *)fb + (size_t)y * fb_pitch), *sr = (u64 *)(bb + (size_t)y * SW);
+        for (int x = 0; x < SW / 2; x++) d[x] = sr[x];
+    }
 }
 
 static void click(int mx, int my)
@@ -424,17 +428,26 @@ void gui_init(void)
 {
     t_enable = tune_bool("gui", "enable", "draw the graphical workspace", TF_LIVE, 1, NULL);
     t_ms = tune_int("gui", "stats_ms", "monitor refresh period (ms); the screen itself redraws only when something changes", TF_LIVE, 500, 100, 5000, NULL);
+    memcpy(font, font_builtin, sizeof font);
+    u64 fbaddr = 0; int via_loader = 0;
+    if (boot_mbi && (boot_mbi[0] & (1u << 12))) {                       /* linear framebuffer set up by GRUB (any VESA-capable PC or VM) */
+        u64 a = *(const u64 *)(boot_mbi + 22); u32 pitch = boot_mbi[24], w = boot_mbi[25], h = boot_mbi[26]; u8 bpp = ((const u8 *)boot_mbi)[108], type = ((const u8 *)boot_mbi)[109];
+        if (type == 1 && bpp == 32 && w >= 800 && h >= 600 && w <= 2560 && h <= 1600 && a && a < 0x100000000ull) { fbaddr = a; SW = (int)w; SH = (int)h; fb_pitch = pitch; via_loader = 1; }
+    }
     struct pci_dev d;
-    if (pci_find(0x1234, 0x1111, &d) || bga_read(0) < 0xB0C0) return;           /* no Bochs VBE display adapter */
-    font_from_vga();
-    u32 bar = pci_read(d.bus, d.dev, d.fn, 0x10) & ~0xFu;
-    pci_write(d.bus, d.dev, d.fn, 4, pci_read(d.bus, d.dev, d.fn, 4) | 0x7);
-    if (!bar) return;
-    u64 pb = pmm_alloc(SW * SH * 4 / 4096), pw = pmm_alloc(SW * SH * 4 / 4096), pc = pmm_alloc(1);
+    if (!via_loader) {
+        if (pci_find(0x1234, 0x1111, &d) || bga_read(0) < 0xB0C0) return;       /* no Bochs VBE display adapter */
+        fbaddr = pci_read(d.bus, d.dev, d.fn, 0x10) & ~0xFu;
+        pci_write(d.bus, d.dev, d.fn, 4, pci_read(d.bus, d.dev, d.fn, 4) | 0x7);
+    }
+    if (!fbaddr) return;
+    u64 pb = pmm_alloc((size_t)SW * SH * 4 / 4096 + 1), pw = pmm_alloc((size_t)SW * SH * 4 / 4096 + 1), pc = pmm_alloc(1);
     if (!pb || !pw || !pc) return;
-    bb = P2V(pb); wall = P2V(pw); fb = P2V(bar);
-    console_use_cells(P2V(pc));                                                  /* take the text cells before the legacy window disappears */
-    bga_write(4, 0); bga_write(1, SW); bga_write(2, SH); bga_write(3, 32); bga_write(4, 0x41);
+    bb = P2V(pb); wall = P2V(pw); fb = P2V(fbaddr);
+    clx0 = cly0 = 0; clx1 = SW; cly1 = SH;
+    console_use_cells(P2V(pc));
+    if (via_loader) { u16 *cl = console_cells(); for (int i = 0; i < VGA_ROWS * VGA_COLS; i++) cl[i] = 0x0720; }   /* a graphics-mode text window holds nothing useful */                                                  /* take the text cells before the legacy window disappears */
+    if (!via_loader) { bga_write(4, 0); bga_write(1, SW); bga_write(2, SH); bga_write(3, 32); bga_write(4, 0x41); }
     render_wallpaper();
     mouse_bounds(SW, SH);
     module_register("gui", "1.0", "graphical workspace on the Bochs VBE framebuffer: windows, mouse, taskbar");
@@ -442,3 +455,8 @@ void gui_init(void)
 }
 
 void gui_start(void) { if (gui_on) { br_init(); thread_create("gui", 6, gui_thread, NULL); } }
+
+void gui_fontdump(void)
+{
+    for (int c = 0; c < 256; c++) { kprintf("F%02x", c); for (int r = 0; r < 16; r++) kprintf("%02x", font[c][r]); kprintf("\n"); }
+}

@@ -97,9 +97,12 @@ static void init_thread(void *arg)
     } else if (net_nic_present()) net_start();
 }
 
+const u32 *boot_mbi;                    /* the loader's multiboot info (framebuffer, modules) */
+
 void kmain(u32 magic, u64 mbi_phys)
 {
     const void *mbi = P2V(mbi_phys);
+    boot_mbi = mbi;
     console_init();                       /* synchronous until console_async_start() */
     if (magic != 0x2BADB002) panic("bad multiboot magic %x", magic);
     vm_init();                            /* drop the boot identity map: the lower half is for user processes */

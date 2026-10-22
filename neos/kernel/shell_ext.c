@@ -440,3 +440,5 @@ int c_browse(int argc, char **argv, struct ctx *c)
     gui_browse(argc > 1 ? argv[1] : "neos://home");
     return 0;
 }
+
+int c_fontdump(int argc, char **argv, struct ctx *c) { (void)argc; (void)argv; (void)c; extern void gui_fontdump(void); gui_fontdump(); return 0; }

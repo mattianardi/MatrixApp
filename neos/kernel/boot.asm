@@ -4,7 +4,7 @@
 ;   PML4[0] is identity-mapped only until the kernel is running in the higher half, then cleared:
 ;   the whole lower half belongs to user processes.
 MB_MAGIC equ 0x1BADB002
-MB_FLAGS equ 0x3            ; page-align modules + memory map
+MB_FLAGS equ 0x7            ; page-align modules + memory map + ask the loader for a linear video mode
 KERNEL_VMA equ 0xFFFFFFFF80000000
 
 section .multiboot
@@ -12,6 +12,8 @@ align 4
     dd MB_MAGIC
     dd MB_FLAGS
     dd -(MB_MAGIC + MB_FLAGS)
+    dd 0, 0, 0, 0, 0        ; address fields (unused for ELF images)
+    dd 0, 1024, 768, 32     ; video: linear framebuffer 1024x768x32 (GRUB sets it; QEMU -kernel ignores it)
 
 section .boot.bss nobits alloc write align=4096
 global boot_pml4

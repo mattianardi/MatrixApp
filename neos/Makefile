@@ -95,6 +95,21 @@ run: DISK = -drive file=$(BUILD)/neos.disk,format=raw,if=ide
 run: all $(BUILD)/neos.disk
 	$(QEMU)
 
+# Graphical session in a QEMU window (keyboard + mouse go to the NEOS workspace; the serial console stays in this terminal).
+gui: DISK = -drive file=$(BUILD)/neos.disk,format=raw,if=ide
+gui: all $(BUILD)/neos.disk
+	$(subst -display none,-display default -vga std,$(QEMU))
+
+# Bootable ISO (GRUB + multiboot): runs in QEMU, VirtualBox, VMware, or from a USB stick on a PC with BIOS boot.
+$(BUILD)/neos.iso: all
+	rm -rf $(BUILD)/iso && mkdir -p $(BUILD)/iso/boot/grub
+	cp $(BUILD)/matrix32.elf $(BUILD)/initrd.npk $(BUILD)/iso/boot/
+	printf 'set timeout=2\nset gfxpayload=1024x768x32\nmenuentry "NEOS" {\n  multiboot /boot/matrix32.elf\n  module /boot/initrd.npk\n}\n' > $(BUILD)/iso/boot/grub/grub.cfg
+	grub-mkrescue -o $@ $(BUILD)/iso 2>/dev/null
+iso: $(BUILD)/neos.iso
+run-iso: $(BUILD)/neos.iso $(BUILD)/neos.disk
+	qemu-system-x86_64 -cdrom $(BUILD)/neos.iso -boot d -m 512 -cpu max -vga std -serial stdio -nic user,model=e1000 -drive file=$(BUILD)/neos.disk,format=raw,if=ide
+
 # Exit code 33 == kernel self-test passed (isa-debug-exit 0x10 -> (0x10<<1)|1).
 test: KARGS := neos.boot.test=1
 test: all
@@ -151,4 +166,4 @@ agenttest: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest disktest clean
+.PHONY: all run gui iso run-iso test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest disktest clean
