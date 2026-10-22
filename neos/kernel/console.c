@@ -16,7 +16,7 @@ static volatile u64 dropped;
 static int async;
 static struct tunable *t_serial, *t_vga, *t_batch, *t_color;
 
-#define vga ((u16 *)P2V(0xB8000))
+static u16 *vga;      /* the text cells: real VGA memory, or a RAM copy once the graphical workspace owns the screen */
 static int vtop, vrow, vcol;
 static u8 vattr = 0x07;
 static int esc, esc_n, esc_have;
@@ -124,6 +124,7 @@ static void console_thread(void *arg)
 
 void console_init(void)
 {
+    vga = (u16 *)P2V(0xB8000);
     outb(COM1 + 1, 0x00); outb(COM1 + 3, 0x80); outb(COM1 + 0, 0x01); outb(COM1 + 1, 0x00);
     outb(COM1 + 3, 0x03); outb(COM1 + 2, 0xC7); outb(COM1 + 4, 0x0B);   /* 115200 8N1, FIFO */
     for (int i = 0; i < VGA_ROWS * VGA_COLS; i++) vga[i] = 0x0720;
@@ -205,4 +206,14 @@ void panic(const char *fmt, ...)
     va_list ap; va_start(ap, fmt); kvformat(kfmt_out, NULL, fmt, ap); va_end(ap);
     kputc('\n');
     qemu_exit(0x11);
+}
+
+u16 *console_cells(void) { return vga; }
+void console_cursor(int *row, int *col) { *row = vrow; *col = vcol; }
+void console_use_cells(u16 *cells)
+{
+    u64 fl = irq_save();
+    memcpy(cells, vga, VGA_ROWS * VGA_COLS * 2);
+    vga = cells;
+    irq_restore(fl);
 }

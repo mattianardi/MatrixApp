@@ -310,3 +310,9 @@ int fs_info(int idx, char *path, size_t pn, size_t *size)
 }
 
 size_t fs_bytes(void) { return total; }
+
+/* every live inode except devices and synthetic /proc files, parents before children is NOT guaranteed (callers create parents on demand) */
+void vfs_walk(void (*cb)(struct inode *i, void *ctx), void *ctx)
+{
+    for (int i = 0; i < MAXI; i++) if (nodes[i].used && !nodes[i].dev && strncmp(nodes[i].path, "/proc", 5)) cb(&nodes[i], ctx);
+}

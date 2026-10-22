@@ -177,7 +177,8 @@ static int c_tune(int argc, char **argv, struct ctx *c)
         for (char *l = buf, *e; *l; l = e + 1) { e = strchr(l, '\n'); if (!e) break; *e = 0; kprintf("neos.%s\n", l); }
         return 0;
     }
-    err("usage: tune [list [prefix] | pending | get <name> | set <name> <value> | export]");
+    if (!strcmp(sub, "save")) { if (neofs_save_settings()) { err("cannot write /etc/neos/tunables.conf"); return -1; } kprintf("settings saved to /etc/neos/tunables.conf (kept on the disk, applied at boot)\n"); neofs_sync(0); return 0; }
+    err("usage: tune [list [prefix] | pending | get <name> | set <name> <value> | export | save]");
     return -1;
 }
 
@@ -415,6 +416,7 @@ static int c_reboot(int argc, char **argv, struct ctx *c)
 {
     (void)argc; (void)argv;
     if (c->pure) return -1;
+    neofs_sync(0);
     kprintf("rebooting...\n"); console_flush_sync();
     outb(0x64, 0xFE);
     for (;;) __asm__ volatile("cli; hlt");
@@ -423,6 +425,7 @@ static int c_poweroff(int argc, char **argv, struct ctx *c)
 {
     (void)argc; (void)argv;
     if (c->pure) return -1;
+    neofs_sync(0);
     kprintf("powering off...\n"); console_flush_sync();
     outw(0x604, 0x2000); outw(0xB004, 0x2000);
     for (;;) __asm__ volatile("cli; hlt");

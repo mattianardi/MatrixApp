@@ -13,10 +13,31 @@ static const char shft[] = "\0\x1b" "!@#$%^&*()_+\b\tQWERTYUIOP{}\n\0ASDFGHJKL:\
 volatile int agents_frozen;             /* set from the IRQ: works even if every thread is busy */
 static int irq_ctrl;
 
-static void kbd_irq(void)
+/* ---- PS/2 mouse (aux port, IRQ12). The controller multiplexes keyboard and mouse bytes; status bit 5 says which. ---- */
+static volatile int m_x = 512, m_y = 384, m_btn, m_seq, m_w = 1024, m_h = 768;
+static u8 m_pkt[3]; static int m_n;
+static int kinject[16]; static volatile u8 kih, kit;
+
+static void mouse_feed(u8 b)
 {
-    while (inb(0x64) & 1) {
+    if (m_n == 0 && !(b & 8)) return;                              /* out of sync: byte 0 always has bit 3 set */
+    m_pkt[m_n++] = b;
+    if (m_n < 3) return;
+    m_n = 0;
+    int dx = m_pkt[1] - ((m_pkt[0] << 4) & 0x100), dy = m_pkt[2] - ((m_pkt[0] << 3) & 0x100);
+    int x = m_x + dx, y = m_y - dy;
+    m_x = x < 0 ? 0 : x >= m_w ? m_w - 1 : x;
+    m_y = y < 0 ? 0 : y >= m_h ? m_h - 1 : y;
+    m_btn = m_pkt[0] & 7;
+    m_seq++;
+}
+
+static void ps2_irq(void)
+{
+    u8 st;
+    while ((st = inb(0x64)) & 1) {
         u8 b = inb(0x60);
+        if (st & 0x20) { mouse_feed(b); continue; }
         if (b == 0x1D) irq_ctrl = 1; else if (b == 0x9D) irq_ctrl = 0;
         else if (b == 0x2B && irq_ctrl) agents_frozen = 1;      /* Ctrl+\ : emergency freeze of all agents */
         u8 n = (rh + 1) & 127;
@@ -24,12 +45,45 @@ static void kbd_irq(void)
     }
 }
 
+static int ps2_wait(int write) { for (int i = 0; i < 100000; i++) { u8 s = inb(0x64); if (write ? !(s & 2) : (s & 1)) return 0; } return -1; }
+static int mouse_cmd(u8 c)
+{
+    if (ps2_wait(1)) return -1;
+    outb(0x64, 0xD4);
+    if (ps2_wait(1)) return -1;
+    outb(0x60, c);
+    if (ps2_wait(0)) return -1;
+    return inb(0x60) == 0xFA ? 0 : -1;
+}
+
+static int mouse_init(void)
+{
+    if (ps2_wait(1)) return -1;
+    outb(0x64, 0xA8);                                              /* enable the aux port */
+    if (ps2_wait(1)) return -1;
+    outb(0x64, 0x20);
+    if (ps2_wait(0)) return -1;
+    u8 cfg = inb(0x60);
+    cfg = (cfg | 2) & ~0x20;                                       /* aux IRQ on, aux clock on */
+    if (ps2_wait(1)) return -1;
+    outb(0x64, 0x60);
+    if (ps2_wait(1)) return -1;
+    outb(0x60, cfg);
+    if (mouse_cmd(0xF6) || mouse_cmd(0xF4)) return -1;             /* defaults, enable streaming */
+    return 0;
+}
+
+void mouse_state(int *x, int *y, int *btn, int *seq) { *x = m_x; *y = m_y; *btn = m_btn; *seq = m_seq; }
+void mouse_bounds(int w, int h) { m_w = w; m_h = h; if (m_x >= w) m_x = w - 1; if (m_y >= h) m_y = h - 1; }
+void key_inject(int c) { u8 n = (kih + 1) & 15; if (n != kit) { kinject[kih] = c; kih = n; } }
+
 void input_init(void)
 {
     module_register("input", "1.0", "PS/2 keyboard (IRQ1) + serial console input");
     t_poll = tune_int("input", "poll_ms", "shell input polling interval (ms)", TF_LIVE, 2, 1, 100, NULL);
     while (inb(0x64) & 1) inb(0x60);
-    irq_register(1, kbd_irq);
+    irq_register(1, ps2_irq);
+    if (!mouse_init()) { module_register("mouse", "1.0", "PS/2 mouse (IRQ12)"); irq_register(12, ps2_irq); }
 }
 
 static int from_serial(void)
@@ -90,6 +144,7 @@ static int from_ps2(void)
 
 int key_poll(void)
 {
+    if (kit != kih) { int c = kinject[kit]; kit = (kit + 1) & 15; return c; }
     int k = from_serial();
     return k >= 0 ? k : from_ps2();
 }

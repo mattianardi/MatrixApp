@@ -416,3 +416,18 @@ static int c_aih_inner(int argc, char **argv, struct ctx *c)
     if (ag) audit_add(agent_index(ag), "aih.run", c->raw, 0, 1);
     return 0;
 }
+
+int c_disk(int argc, char **argv, struct ctx *c)
+{
+    (void)c;
+    const char *sub = argc > 1 ? argv[1] : "status";
+    if (!strcmp(sub, "status")) { neofs_status(); return 0; }
+    if (!strcmp(sub, "sync")) {
+        int r = neofs_sync(1);
+        if (r) { kprintf("\x1b[91mdisk: sync failed (%d)%s\x1b[0m\n", r, neofs_present() ? "" : " - no disk attached"); return -1; }
+        kprintf("snapshot written\n"); return 0;
+    }
+    if (!strcmp(sub, "format")) { if (neofs_format()) { kprintf("\x1b[91mdisk: no disk\x1b[0m\n"); return -1; } kprintf("disk snapshots erased (the running system is untouched)\n"); return 0; }
+    kprintf("usage: disk [status|sync|format]\n");
+    return -1;
+}

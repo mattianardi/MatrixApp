@@ -90,6 +90,8 @@ static void ui_thread(void *arg)
     }
 }
 
+int ui_cpu_pct(void) { return cpu_pct; }
+
 void ui_start(void) { thread_create("ui", 5, ui_thread, NULL); }
 
 int ui_pin(const char *title, const char *pipeline, const char **err)

@@ -11,9 +11,10 @@ OBJS := $(BUILD)/boot.o $(BUILD)/isr.o $(patsubst kernel/%.c,$(BUILD)/%.o,$(CSRC
 
 AGENT_CHAN ?= -serial unix:$(BUILD)/agent.sock,server,nowait
 NIC ?= -nic user,model=e1000
+DISK ?=
 KARGS ?=
 QEMU = qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -initrd $(BUILD)/initrd.npk -m 512 -display none -append "$(KARGS)" \
-        -cpu max -serial stdio $(AGENT_CHAN) -no-reboot $(NIC) -device isa-debug-exit,iobase=0xf4,iosize=0x04
+        -cpu max -serial stdio $(AGENT_CHAN) -no-reboot $(NIC) $(DISK) -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 USER_CFLAGS := -O2 -Wall -ffreestanding -fno-stack-protector -nostdlib -static -mno-avx -fno-asynchronous-unwind-tables \
                -Wl,--build-id=none -Wl,-z,max-page-size=4096
@@ -84,7 +85,11 @@ $(BUILD)/matrix32.elf: $(BUILD)/matrix.elf
 $(BUILD):
 	mkdir -p $@
 
-run: all
+$(BUILD)/neos.disk: | $(BUILD)
+	truncate -s 64M $@
+
+run: DISK = -drive file=$(BUILD)/neos.disk,format=raw,if=ide
+run: all $(BUILD)/neos.disk
 	$(QEMU)
 
 # Exit code 33 == kernel self-test passed (isa-debug-exit 0x10 -> (0x10<<1)|1).
@@ -99,6 +104,8 @@ test: all
 	@$(MAKE) --no-print-directory niotest
 	@$(MAKE) --no-print-directory aihtest
 	@$(MAKE) --no-print-directory agenttest
+	@$(MAKE) --no-print-directory guitest
+	@$(MAKE) --no-print-directory disktest
 
 shelltest: all
 	@tools/check-shell.sh
@@ -121,10 +128,16 @@ niotest: all
 aihtest: all
 	@python3 tools/check-aih.py | tail -1
 
+disktest: all
+	@tools/check-disk.sh
+
+guitest: all
+	@python3 tools/check-gui.py | tail -1
+
 agenttest: all
 	@python3 tools/check-agent.py | tail -1
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest clean
+.PHONY: all run test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest disktest clean

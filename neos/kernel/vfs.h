@@ -62,4 +62,5 @@ long inode_write(struct inode *i, u64 off, const void *buf, size_t n);
 int  inode_truncate(struct inode *i, u64 len);
 int  vfs_readdir(const char *dir, int idx, char *name, size_t nn, int *type, u32 *ino);   /* 0 = entry returned */
 u64  vfs_now(void);                                                  /* unix seconds */
+void vfs_walk(void (*cb)(struct inode *i, void *ctx), void *ctx);
 void vfs_register_proc_hook(int (*hook)(const char *path, char *buf, size_t n));       /* synthetic /proc files */

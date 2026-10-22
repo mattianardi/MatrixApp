@@ -4,7 +4,13 @@
 /* Keys produced by input.c: ASCII (Enter = '\n', Backspace = '\b'), Ctrl-A..Z = 1..26, or: */
 enum { K_UP = 0x100, K_DOWN, K_LEFT, K_RIGHT, K_HOME, K_END, K_DEL, K_PGUP, K_PGDN };
 void input_init(void);
-int  key_poll(void);                 /* -1 if nothing is pending */
+int  key_poll(void);
+void key_inject(int c);             /* queue a key as if typed (GUI buttons) */
+void mouse_state(int *x, int *y, int *btn, int *seq);
+void mouse_bounds(int w, int h);
+int  ui_cpu_pct(void);
+void gui_init(void);
+void gui_start(void);                 /* -1 if nothing is pending */
 
 /* Structured command output: commands fill tables, the shell filters/renders/pins them. */
 #define TB_COLS 8

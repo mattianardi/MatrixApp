@@ -79,11 +79,14 @@ static void init_thread(void *arg)
     (void)arg;
     providers_init();
     load_initrd();
+    neofs_load();
     install_applets();
     if (t_test->val) { int rc = selftest_run(); qemu_exit(rc ? 0x11 : 0x10); }
     agentd_start();
+    neofs_start();
     shell_start();
     ui_start();
+    gui_start();
     if (net_nic_present() && net_wants_dhcp()) {
         net_start();
         if (net_dhcp() == 0) { char b[24]; ip_format(net_ip(), b, sizeof b); kprintf("\n[net] DHCP: %s\n", b); }
@@ -121,6 +124,7 @@ void kmain(u32 magic, u64 mbi_phys)
     input_init();
     fs_init();
     pkg_init();
+    neofs_init();
     net_init();
     bus_init();
     agent_init();
@@ -129,6 +133,7 @@ void kmain(u32 magic, u64 mbi_phys)
     agent_add("aih", AK_NATIVE, NULL, NULL, 0, &(const char *){ "" });
     linux_init();
     ui_init();
+    gui_init();
     console_async_start();
     bus_start();
 

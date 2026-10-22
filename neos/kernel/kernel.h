@@ -50,6 +50,9 @@ char  *strchr(const char *s, int c);
 size_t strlcpy(char *d, const char *s, size_t n);
 size_t strlcat(char *d, const char *s, size_t n);
 int    memcmp(const void *a, const void *b, size_t n);
+/* neofs.c: durable storage */
+void neofs_init(void); void neofs_start(void); int neofs_load(void); int neofs_sync(int force); int neofs_format(void);
+int neofs_save_settings(void); void neofs_status(void); int neofs_present(void);
 void  *memset(void *d, int c, size_t n);
 void  *memcpy(void *d, const void *s, size_t n);
 void  *memmove(void *d, const void *s, size_t n);
@@ -78,6 +81,9 @@ void console_clear_stream(void);
 void vga_write(int row, int col, const char *s, u8 attr, int width);   /* fixed-position text (UI) */
 void console_dump_screen(void);     /* debug: print VGA text to serial */
 u64  console_dropped(void);
+u16 *console_cells(void);           /* the 80x25 text cell grid (char | attr<<8) */
+void console_cursor(int *row, int *col);
+void console_use_cells(u16 *cells); /* switch the grid to RAM (the graphical workspace draws it) */
 #define VGA_ROWS 25
 #define VGA_COLS 80
 
