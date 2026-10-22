@@ -153,6 +153,9 @@ u64 sched_runticks_total(void) { return total_run; }
 
 static struct frame *switch_to_best(struct frame *cur, int yielded)
 {
+    /* The exit and yield paths of syscalls arrive here with interrupts ON: a timer tick inside this function would run a
+     * nested switch on top of a half-finished one and resume the wrong context. Interrupts stay off until the iretq. */
+    __asm__ volatile("cli" ::: "memory");
     struct thread *t = &threads[current];
     t->saved = cur;
     if (!yielded) { t->runticks++; total_run++; }
