@@ -114,7 +114,7 @@ static int has_dotdot(const char *s)
 }
 
 /* walk an NPK; if `write`, install under /opt/<name>. Returns file count or -1. */
-static int npk_walk(const char *name, const u8 *d, size_t n, int write, const char **err)
+static int npk_walk(const char *root, const u8 *d, size_t n, int write, const char **err)
 {
     if (n < 5 || memcmp(d, "NPK1\n", 5)) { *err = "not an NPK package"; return -1; }
     size_t i = 5; int files = 0;
@@ -131,7 +131,7 @@ static int npk_walk(const char *name, const u8 *d, size_t n, int write, const ch
         i++;
         if (!rel[0] || rel[0] == '/' || has_dotdot(rel)) { *err = "package contains an unsafe path"; return -1; }
         if (write) {
-            char path[128]; ksnprintf(path, sizeof path, "/opt/%s/%s", name, rel);
+            char path[128]; ksnprintf(path, sizeof path, "%s/%s", root, rel);
             if (fs_write(path, d + i, (size_t)sz)) { *err = "filesystem full"; return -1; }
         }
         i += (size_t)sz + 1;
@@ -144,12 +144,12 @@ static int npk_walk(const char *name, const u8 *d, size_t n, int write, const ch
 /* validate the whole package first, then replace /opt/<name>; returns file count or -1 */
 int pkg_install_blob(const char *name, const char *ver, const u8 *d, size_t n, const char **err)
 {
-    int files = npk_walk(name, d, n, 0, err);
-    if (files < 0) return -1;
     char root[64], rec[64];
     ksnprintf(root, sizeof root, "/opt/%s", name);
+    int files = npk_walk(root, d, n, 0, err);
+    if (files < 0) return -1;
     fs_remove_tree(root);
-    npk_walk(name, d, n, 1, err);
+    npk_walk(root, d, n, 1, err);
     ksnprintf(rec, sizeof rec, "/var/pkg/%s", name);
     fs_write(rec, ver, strlen(ver));
     return files;
@@ -215,4 +215,13 @@ int pkg_remove(const char *name, const char **err)
     fs_remove(rec);
     kprintf("removed %s (%d files)\n", name, n);
     return 0;
+}
+
+/* unpack an NPK into the filesystem root (used for the boot-time initrd) */
+int pkg_extract_root(const u8 *d, size_t n, const char **err)
+{
+    int files = npk_walk("", d, n, 0, err);
+    if (files < 0) return -1;
+    npk_walk("", d, n, 1, err);
+    return files;
 }

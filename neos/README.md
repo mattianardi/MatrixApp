@@ -72,10 +72,28 @@ Limiti attuali, detti chiaramente:
 
 - Il canale remoto è una **seriale fisica** con token (conservato solo come SHA-256, con ritardo anti-indovinello). Non c’è
   ancora un canale di rete perché manca TLS.
-- Gli agenti **scrivono e impacchettano** app ma NEOS **non può ancora eseguirle** (manca modalità utente + loader);
-  la compilazione va fatta dall’agente fuori dal sistema o attende una toolchain interna.
+- Gli agenti **scrivono, impacchettano ed eseguono** app (`run` su un ELF x86-64 per NEOS); la compilazione va fatta
+  fuori dal sistema finché non esiste una toolchain interna. Un ELF Linux standard (glibc) non gira ancora: serve l'ABI Linux.
 - Audit e journal sono in RAM (nessun disco): la catena è verificabile, non ancora persistente né firmata.
 - La misura delle ottimizzazioni su QEMU è rumorosa; significativa solo su hardware reale con TSC invariante.
+
+## Processi in modalità utente (ring 3)
+
+- **Kernel nella metà alta** (`0xFFFFFFFF80000000`) con mappa diretta della RAM (`0xFFFF800000000000`); l'intera metà
+  bassa è dei processi. Per questo i binari con indirizzi fissi classici (`0x400000`) funzionano senza trucchi.
+- **Un address space per processo** (paging a 4 livelli, NX, SMEP/SMAP quando la CPU li ha, TSS, segmenti utente),
+  stato FPU/SSE salvato per thread, limite di memoria per processo (`proc.max_pages`), memoria restituita alla morte.
+- **Loader ELF64**: `ET_EXEC` agli indirizzi propri e `ET_DYN` (static-PIE, `R_X86_64_RELATIVE`), stack in stile
+  System V (argv, envp, auxv). **L'ambiente del processo viene dal bus di variabili** nella convenzione del suo mondo
+  (`run -w win` gli passa `HOME=C:\Users\neos` e `PATH` con `;`).
+- **Isolamento verificato**: un programma che scrive o legge memoria del kernel, usa il puntatore nullo, esegue
+  `cli`/`in`, esegue dati (NX) o divide per zero viene ucciso da solo; puntatori non validi nelle syscall danno `-EFAULT`.
+- **Capacità = agenti**: ogni processo è un principal del gate degli agenti, parte con la sola osservazione e ottiene
+  altro solo dall'operatore (`run -g tune:sched.quantum[2..20] programma`). Per ottimizzare o configurare il sistema
+  a runtime un programma usa `USYS_TOOL`, cioè gli stessi strumenti (con gli stessi permessi, audit, approvazioni e
+  rollback) di un agente AI. Nessuna syscall "privilegiata" parallela.
+- Scrivere un programma: `user/neos.h` (nessuna libc). Comandi: `run [-b] [-g cap[:scope]] [-w lin|win] [-p prio] <prog>`,
+  `proc`, `pkill`. Il filesystem iniziale arriva da un `initrd` (archivio NPK passato come modulo multiboot).
 
 ## Rete e pacchetti
 
@@ -92,7 +110,7 @@ Requisiti: `gcc`, `nasm`, `ld`, `objcopy`, `qemu-system-x86_64`, `python3`.
 
 ```
 make run         # avvia in QEMU (seriale su stdio, rete e1000 user-mode)
-make test        # self-test RT + shell/interop + rete/pacchetti (anche manomissione) + agenti (permessi, approvazioni, tuner)
+make test        # self-test RT + shell/interop + rete/pacchetti (anche manomissione) + processi ring 3 (isolamento, perdite) + agenti
 ```
 
 ## Stato e cosa manca (onestamente)
@@ -104,8 +122,8 @@ Non ancora fatto:
 
 | Area | Stato |
 |---|---|
-| Modalità utente (ring 3), memoria virtuale per processo, `syscall/sysret` | da fare — prerequisito per eseguire programmi (e per agenti come processi isolati) |
-| Loader ELF + ABI syscall Linux; loader PE + sottosistema Win32/NT | da fare — i *dati* (variabili, percorsi, ambiente) sono già pronti |
+| `syscall/sysret`, `fork/exec`, thread utente multipli, memoria condivisa, `munmap`, demand paging | da fare — oggi un thread per processo e `int 0x80` |
+| ABI syscall Linux (per eseguire binari Linux non modificati); loader PE + sottosistema Win32/NT | da fare — loader ELF, ambiente, percorsi e variabili sono già pronti; i programmi attuali usano l'ABI nativa di NEOS |
 | Storage persistente (ATA/NVMe/virtio-blk) e filesystem su disco | da fare — oggi FS in RAM; le impostazioni “boot” si passano da riga di comando |
 | TLS / firme digitali dei pacchetti | da fare — oggi solo HTTP + SHA-256 + pin dell’indice |
 | SMP/APIC, isolamento dei core, tickless, priority inheritance sui mutex | da fare |

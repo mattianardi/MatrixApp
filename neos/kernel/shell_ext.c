@@ -206,3 +206,56 @@ int c_sha256(int argc, char **argv, struct ctx *c)
     kprintf("%s  %s (%lu bytes)\n", h, p, (u64)n);
     return 0;
 }
+
+/* ---- processes ---- */
+#include "proc.h"
+#include "agent.h"
+
+static int ctrl_c(void) { return key_poll() == 3; }
+
+int c_run(int argc, char **argv, struct ctx *c)
+{
+    struct spawn_opts o = { 0 };
+    int bg = 0, i = 1;
+    if (c->pure) return -1;
+    for (; i < argc && argv[i][0] == '-'; i++) {
+        if (!strcmp(argv[i], "-b")) bg = 1;
+        else if (!strcmp(argv[i], "-g") && i + 1 < argc && o.ngrant < 8) o.grant[o.ngrant++] = argv[++i];
+        else if (!strcmp(argv[i], "-w") && i + 1 < argc) o.world = strcmp(argv[++i], "win") ? NEOS_VIEW_LINUX : NEOS_VIEW_WINDOWS;
+        else if (!strcmp(argv[i], "-p") && i + 1 < argc) { i64 v; if (parse_i64(argv[++i], &v) || v < 0 || v > 7) { err("priority 0-7"); return -1; } o.prio = (int)v + 1; }
+        else { err("usage: run [-b] [-g cap[:scope]]... [-w lin|win] [-p prio] <program> [args...]"); return -1; }
+    }
+    if (i >= argc) { err("usage: run [-b] [-g cap[:scope]]... [-w lin|win] [-p prio] <program> [args...]"); return -1; }
+    int pid; const char *e = "";
+    if (proc_spawn(argv[i], argc - i, argv + i, &o, &pid, &e)) { kprintf("\x1b[91mrun: %s\x1b[0m\n", e); return -1; }
+    if (bg) { kprintf("[pid %d] started in background\n", pid); return 0; }
+    i64 code;
+    int r = proc_wait(pid, &code, ctrl_c);
+    if (r == -2) { proc_kill(pid, 130); kprintf("^C\n[pid %d] interrupted\n", pid); return -1; }
+    kprintf("[pid %d] exited with code %ld\n", pid, code);
+    return code == 0 ? 0 : -1;
+}
+
+int c_proc(int argc, char **argv, struct ctx *c)
+{
+    (void)argc; (void)argv;
+    static const char *st[] = { "-", "running", "zombie", "exited" };
+    tb_init(c->tb, "pid", "name", "state", "pages", "syscalls", "age_ms", "exit", NULL);
+    for (int s = 0; s < MAX_PROCS; s++) {
+        struct proc *p = proc_get(s);
+        if (!p || tb_newrow(c->tb) < 0) continue;
+        tb_set(c->tb, 0, "%d", p->pid); tb_set(c->tb, 1, "%s", p->name); tb_set(c->tb, 2, "%s", st[p->state]);
+        tb_set(c->tb, 3, "%lu", (u64)p->as.pages); tb_set(c->tb, 4, "%lu", p->syscalls);
+        tb_set(c->tb, 5, "%lu", (ticks - p->start_tick) * 1000 / timer_hz());
+        if (p->state >= P_ZOMBIE) tb_set(c->tb, 6, "%ld", p->exit_code); else tb_set(c->tb, 6, "-");
+    }
+    return 0;
+}
+
+int c_pkill(int argc, char **argv, struct ctx *c)
+{
+    i64 pid;
+    if (c->pure) return -1;
+    if (argc < 2 || parse_i64(argv[1], &pid) || proc_kill((int)pid, 137)) { err("usage: pkill <pid>   (see `proc`)"); return -1; }
+    return 0;
+}

@@ -29,6 +29,8 @@ void pmm_init(const void *mbi)
     if (start < 0x200000) start = 0x200000;
 
     const u8 *p = P2V(info[12]), *end = p + info[11];
+    const u32 *mods = (info[0] & (1 << 3)) ? P2V(info[6]) : NULL;      /* boot modules (initrd) must not be handed out */
+    u32 nmods = mods ? info[5] : 0;
     while (p < end) {
         const struct mmap_entry *e = (const void *)p;
         if (e->type == 1) {
@@ -39,6 +41,8 @@ void pmm_init(const void *mbi)
         }
         p += e->size + 4;
     }
+    for (u32 i = 0; i < nmods; i++)
+        for (u64 a = mods[i * 4] & ~0xFFFull; a < mods[i * 4 + 1]; a += PAGE) { if (!(bitmap[(a / PAGE) / 32] & (1u << ((a / PAGE) % 32)))) { mark(a / PAGE, 1); total_count--; } }
 }
 
 u64 pmm_alloc(size_t pages)

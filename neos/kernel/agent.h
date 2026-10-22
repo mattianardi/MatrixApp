@@ -15,7 +15,7 @@ enum { POL_ALLOW, POL_ASK, POL_DENY };
 enum { AK_NATIVE, AK_REMOTE };
 enum { AS_ACTIVE, AS_SUSPENDED };
 
-#define AG_MAX     8
+#define AG_MAX     32
 #define AG_JOURNAL 32
 
 struct jent { u8 kind; int a; char name[48]; char old[96]; u8 *blob; size_t blen; int had; };

@@ -1,5 +1,6 @@
 #include "kernel.h"
 #include "neos_api.h"
+#include "vm.h"
 
 /*
  * Deterministic scheduler: fixed priorities, no allocation and no priority
@@ -18,12 +19,18 @@ struct thread {
     u32 quantum;
     u64 wake, stamp, runticks, ready_tsc, lat_max;
     u64 stack; u32 stack_pages;
+    u64 cr3, ktop;                 /* address space and kernel-stack top (TSS.rsp0) */
+    void *proc;
     struct frame *saved;
+    u8 fx[512] __attribute__((aligned(16)));          /* FXSAVE area (user threads only) */
 };
 
 static struct thread threads[SCHED_MAX_THREADS];
 static int current;
-static u64 seq, total_run;
+static u64 seq, total_run, cur_cr3;
+static u8 fx_init[512] __attribute__((aligned(16)));
+#define FXSAVE(p)  __asm__ volatile("fxsave (%0)" :: "r"(p) : "memory")
+#define FXRSTOR(p) __asm__ volatile("fxrstor (%0)" :: "r"(p) : "memory")
 static u64 rt_lat_max, rt_lat_sum, rt_lat_n;      /* TSC cycles, real-time class only */
 static struct tunable *t_quantum, *t_stack, *t_rtprio, *t_latstats;
 
@@ -44,11 +51,14 @@ static void thread_exit(void)
 
 void sched_init(void)
 {
-    threads[0] = (struct thread){ .name = "idle", .state = RUNNING, .prio = SCHED_PRIO_IDLE };
+    threads[0] = (struct thread){ .name = "idle", .state = RUNNING, .prio = SCHED_PRIO_IDLE, .cr3 = vm_kernel_pml4() };
+    cur_cr3 = vm_kernel_pml4();
     current = 0;
+    __asm__ volatile("fninit");
+    FXSAVE(fx_init);                                       /* clean FPU/SSE state handed to every new user thread */
 }
 
-int thread_create(const char *name, u8 prio, thread_fn fn, void *arg)
+static int create(const char *name, u8 prio, thread_fn fn, void *arg, void *proc, u64 cr3, u64 urip, u64 ursp)
 {
     u64 fl = irq_save();
     int slot = -1;
@@ -61,17 +71,47 @@ int thread_create(const char *name, u8 prio, thread_fn fn, void *arg)
     u64 stack = pmm_alloc(pages);
     if (!stack) { t->state = UNUSED; irq_restore(fl); return -1; }
     u64 top = (u64)P2V(stack) + (u64)pages * 4096;
-    *(u64 *)(top - 8) = (u64)thread_exit;                   /* return address of fn */
-    struct frame *f = (struct frame *)(top - 8 - sizeof *f);
-    memset(f, 0, sizeof *f);
-    f->rip = (u64)fn; f->rdi = (u64)arg;
-    f->cs = 0x08; f->ss = 0x10; f->rflags = 0x202;
-    f->rsp = top - 8;
+    struct frame *f;
+    if (proc) {                                             /* first run = iretq into ring 3 */
+        f = (struct frame *)(top - sizeof *f);
+        memset(f, 0, sizeof *f);
+        f->rip = urip; f->cs = SEL_UCODE; f->ss = SEL_UDATA; f->rflags = 0x202; f->rsp = ursp;
+    } else {
+        *(u64 *)(top - 8) = (u64)thread_exit;               /* return address of fn */
+        f = (struct frame *)(top - 8 - sizeof *f);
+        memset(f, 0, sizeof *f);
+        f->rip = (u64)fn; f->rdi = (u64)arg;
+        f->cs = SEL_KCODE; f->ss = SEL_KDATA; f->rflags = 0x202;
+        f->rsp = top - 8;
+    }
     *t = (struct thread){ .name = name, .state = READY, .prio = prio, .stamp = ++seq, .ready_tsc = rdtsc(),
-                          .stack = stack, .stack_pages = pages, .saved = f };
+                          .stack = stack, .stack_pages = pages, .cr3 = cr3, .ktop = top, .proc = proc, .saved = f };
+    if (proc) memcpy(t->fx, fx_init, sizeof t->fx);
     irq_restore(fl);
     return slot;
 }
+
+int thread_create(const char *name, u8 prio, thread_fn fn, void *arg)
+{
+    return create(name, prio, fn, arg, NULL, vm_kernel_pml4(), 0, 0);
+}
+
+int thread_create_user(const char *name, u8 prio, void *proc, u64 cr3, u64 rip, u64 usp)
+{
+    return create(name, prio, NULL, NULL, proc, cr3, rip, usp);
+}
+
+void *sched_current_proc(void) { return threads[current].proc; }
+
+/* mark dead without switching (fault / exit paths return a frame to resume instead) */
+void thread_mark_dead(int id)
+{
+    u64 fl = irq_save();
+    if (id > 0 && id < SCHED_MAX_THREADS && threads[id].state != UNUSED) threads[id].state = DEAD;
+    irq_restore(fl);
+}
+
+int thread_is_dead(int id) { return id <= 0 || id >= SCHED_MAX_THREADS || threads[id].state == DEAD || threads[id].state == UNUSED; }
 
 int thread_self(void) { return current; }
 
@@ -148,7 +188,13 @@ static struct frame *switch_to_best(struct frame *cur, int yielded)
         threads[next].quantum = (u32)t_quantum->val;
         threads[next].stamp = ++seq;
     }
+    if (next != current) {
+        if (t->proc) FXSAVE(t->fx);
+        if (threads[next].proc) FXRSTOR(threads[next].fx);
+    }
     current = next;
+    if (threads[next].cr3 != cur_cr3) { cur_cr3 = threads[next].cr3; vm_switch(cur_cr3); }
+    if (threads[next].ktop) tss_set_rsp0(threads[next].ktop);
     return threads[next].saved;
 }
 

@@ -3,9 +3,11 @@
 #include "varbus.h"
 #include "net.h"
 #include "agent.h"
+#include "proc.h"
 #include "fs.h"
 
 static struct tunable *t_test;
+static const void *initrd_pending;
 
 static void fmt_cpu(char *b, size_t n)  { ksnprintf(b, n, "%s%s", cpu_brand(), cpu_invariant_tsc() ? "  (invariant TSC)" : ""); }
 static void fmt_mem(char *b, size_t n)
@@ -16,6 +18,7 @@ static void fmt_mem(char *b, size_t n)
 }
 static void fmt_sched(char *b, size_t n) { ksnprintf(b, n, "fixed-priority preemptive, %u Hz tick", timer_hz()); }
 static void fmt_net(char *b, size_t n)   { if (!net_nic_present()) { strlcpy(b, "no supported NIC found", n); return; } struct tunable *m = tune_find("net.mac"); ksnprintf(b, n, "e1000 %s (DHCP at boot: %s)", m->sval, net_wants_dhcp() ? "on" : "off"); }
+static void fmt_sec(char *b, size_t n)   { ksnprintf(b, n, "ring 3 processes, NX, SMEP %s, SMAP %s, kernel in the higher half", vm_smep() ? "on" : "off", vm_smap() ? "on" : "off"); }
 static void fmt_mods(char *b, size_t n)  { ksnprintf(b, n, "%d modules, %d tunable settings", module_count(), tune_count()); }
 static void fmt_build(char *b, size_t n) { ksnprintf(b, n, "x86_64, built %s", __DATE__); }
 
@@ -41,10 +44,24 @@ static void providers_init(void)
     bus_set("PWD", "/", NEOS_VIEW_LINUX, 1, &e);
 }
 
+static void load_initrd(void)
+{
+    const u32 *info = initrd_pending;
+    if (!(info[0] & (1 << 3))) return;
+    const u32 *mods = P2V(info[6]);
+    for (u32 i = 0; i < info[5]; i++) {
+        const char *e = "";
+        int n = pkg_extract_root(P2V(mods[i * 4]), mods[i * 4 + 1] - mods[i * 4], &e);
+        if (n < 0) kprintf("[initrd] module %u rejected: %s\n", i, e);
+        else kprintf("[initrd] %d files unpacked\n", n);
+    }
+}
+
 static void init_thread(void *arg)
 {
     (void)arg;
     providers_init();
+    load_initrd();
     if (t_test->val) { int rc = selftest_run(); qemu_exit(rc ? 0x11 : 0x10); }
     agentd_start();
     shell_start();
@@ -61,14 +78,18 @@ void kmain(u32 magic, u64 mbi_phys)
     const void *mbi = P2V(mbi_phys);
     console_init();                       /* synchronous until console_async_start() */
     if (magic != 0x2BADB002) panic("bad multiboot magic %x", magic);
+    vm_init();                            /* drop the boot identity map: the lower half is for user processes */
+    gdt_init();
 
     const u32 *mb = mbi;
     if (mb[0] & (1 << 2)) tune_bootargs((const char *)P2V(mb[4]));      /* kernel command line */
     module_register("kernel", NEOS_VERSION, "boot, interrupts, API");
     t_test = tune_bool("boot", "test", "run the RT self-test and exit QEMU (CI)", TF_BOOT, 0, NULL);
 
+    vm_tunables();
     pmm_init(mbi);
     heap_init();
+    initrd_pending = mbi;
     idt_init();
     pic_init();
     timer_init();
@@ -81,6 +102,7 @@ void kmain(u32 magic, u64 mbi_phys)
     net_init();
     bus_init();
     agent_init();
+    proc_init();
     ui_init();
     console_async_start();
     bus_start();
@@ -89,6 +111,7 @@ void kmain(u32 magic, u64 mbi_phys)
     splash_info("CPU",       fmt_cpu);
     splash_info("Memory",    fmt_mem);
     splash_info("Scheduler", fmt_sched);
+    splash_info("Security",  fmt_sec);
     splash_info("Network",   fmt_net);
     splash_info("Modules",   fmt_mods);
     splash_show();

@@ -35,3 +35,18 @@ struct neos_api {
     long (*var_set)(const char *name, const char *value, int view);
 };
 const struct neos_api *neos_api_get(void);
+
+/* ---- ABI for user programs (ring 3): `int 0x80`, rax = number, rdi rsi rdx r10 = args, result in rax ---- */
+enum neos_usys {
+    USYS_EXIT     = 1,   /* (code)                          does not return                      */
+    USYS_WRITE    = 2,   /* (fd 1|2, buf, len)              -> bytes written / -EFAULT           */
+    USYS_GETPID   = 3,
+    USYS_YIELD    = 4,
+    USYS_SLEEP_MS = 5,   /* (ms)                                                                 */
+    USYS_TIME_NS  = 6,   /* ()                              -> monotonic ns                      */
+    USYS_MMAP     = 7,   /* (len)                           -> address of fresh zeroed RW pages  */
+    USYS_TOOL     = 8,   /* (cmdline, out, outlen)          -> 0 or error code; the same tools an agent has, under this process's capabilities */
+};
+#define NEOS_EFAULT 14
+#define NEOS_ENOMEM 12
+#define NEOS_ENOSYS 38
