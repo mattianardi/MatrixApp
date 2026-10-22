@@ -22,3 +22,5 @@ int  pkg_install(const char *name, const char **err);
 int  pkg_remove(const char *name, const char **err);
 int  pkg_table(struct table *t);
 int  pkg_info(const char *name);
+int  pkg_install_blob(const char *name, const char *ver, const u8 *d, size_t n, const char **err);
+int  pkg_build(const char *name, const char *ver, const char *dir, char *outpath, size_t on, char sha[65], size_t *size, const char **err);

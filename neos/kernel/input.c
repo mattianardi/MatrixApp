@@ -10,10 +10,15 @@ static struct tunable *t_poll;
 static const char norm[] = "\0\x1b" "1234567890-=\b\tqwertyuiop[]\n\0asdfghjkl;'`\0\\zxcvbnm,./\0*\0 ";
 static const char shft[] = "\0\x1b" "!@#$%^&*()_+\b\tQWERTYUIOP{}\n\0ASDFGHJKL:\"~\0|ZXCVBNM<>?\0*\0 ";
 
+volatile int agents_frozen;             /* set from the IRQ: works even if every thread is busy */
+static int irq_ctrl;
+
 static void kbd_irq(void)
 {
     while (inb(0x64) & 1) {
         u8 b = inb(0x60);
+        if (b == 0x1D) irq_ctrl = 1; else if (b == 0x9D) irq_ctrl = 0;
+        else if (b == 0x2B && irq_ctrl) agents_frozen = 1;      /* Ctrl+\ : emergency freeze of all agents */
         u8 n = (rh + 1) & 127;
         if (n != rt) { ring[rh] = b; rh = n; }
     }

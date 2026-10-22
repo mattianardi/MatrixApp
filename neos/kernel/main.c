@@ -2,6 +2,7 @@
 #include "shell.h"
 #include "varbus.h"
 #include "net.h"
+#include "agent.h"
 #include "fs.h"
 
 static struct tunable *t_test;
@@ -45,6 +46,7 @@ static void init_thread(void *arg)
     (void)arg;
     providers_init();
     if (t_test->val) { int rc = selftest_run(); qemu_exit(rc ? 0x11 : 0x10); }
+    agentd_start();
     shell_start();
     ui_start();
     if (net_nic_present() && net_wants_dhcp()) {
@@ -77,6 +79,7 @@ void kmain(u32 magic, const void *mbi)
     pkg_init();
     net_init();
     bus_init();
+    agent_init();
     ui_init();
     console_async_start();
     bus_start();

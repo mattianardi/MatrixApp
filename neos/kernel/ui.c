@@ -1,5 +1,6 @@
 #include "shell.h"
 #include "varbus.h"
+#include "agent.h"
 
 /*
  * One screen, one surface: row 0 is a live status bar, below it an optional dock
@@ -50,7 +51,12 @@ static void status_bar(void)
     ksnprintf(line, sizeof line, " %s %s | up %02lu:%02lu:%02lu | cpu %d%% | mem %luM free | %uHz jitter<=%luus | ip %s",
               NEOS_NAME, NEOS_VERSION, up / 3600, up / 60 % 60, up % 60, cpu_pct,
               (u64)pmm_free_pages() / 256, timer_hz(), mx / 1000, ip);
-    vga_write(0, 0, line, 0x30, VGA_COLS);
+    line[65] = 0;
+    vga_write(0, 0, line, 0x30, 66);
+    int pend = approval_count_pending();
+    if (agent_is_frozen()) vga_write(0, 66, " AGENTS FROZEN", 0x4F, 14);
+    else if (pend) { char b[16]; ksnprintf(b, sizeof b, " APPROVE: %d", pend); vga_write(0, 66, b, 0x4E, 14); }
+    else { int n = 0; for (int i = 0; i < AG_MAX; i++) n += agent_at(i) != NULL; char b[16]; ksnprintf(b, sizeof b, " agents: %d", n); vga_write(0, 66, b, 0x30, 14); }
 }
 
 static void draw_dock(void)

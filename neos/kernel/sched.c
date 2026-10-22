@@ -16,7 +16,7 @@ struct thread {
     enum state state;
     u8 prio;
     u32 quantum;
-    u64 wake, stamp, runticks;
+    u64 wake, stamp, runticks, ready_tsc, lat_max;
     u64 stack; u32 stack_pages;
     struct frame *saved;
 };
@@ -24,13 +24,16 @@ struct thread {
 static struct thread threads[SCHED_MAX_THREADS];
 static int current;
 static u64 seq, total_run;
-static struct tunable *t_quantum, *t_stack;
+static u64 rt_lat_max, rt_lat_sum, rt_lat_n;      /* TSC cycles, real-time class only */
+static struct tunable *t_quantum, *t_stack, *t_rtprio, *t_latstats;
 
 void sched_register_tunables(void)
 {
     module_register("sched", "1.2", "fixed-priority preemptive scheduler, per-thread CPU accounting");
     t_quantum = tune_int("sched", "quantum", "round-robin slice for equal priorities (ticks)", TF_LIVE, 10, 1, 10000, NULL);
     t_stack   = tune_int("sched", "stack_pages", "kernel stack size of new threads (4 KiB pages)", TF_LIVE, 8, 2, 256, NULL);
+    t_rtprio  = tune_int("sched", "rt_prio_max", "threads with priority <= this form the real-time class (latency is tracked for them)", TF_LIVE, 3, 0, 6, NULL);
+    t_latstats = tune_bool("sched", "latency_stats", "measure ready->running latency (2 TSC reads per switch)", TF_LIVE, 1, NULL);
 }
 
 static void thread_exit(void)
@@ -64,7 +67,7 @@ int thread_create(const char *name, u8 prio, thread_fn fn, void *arg)
     f->rip = (u64)fn; f->rdi = (u64)arg;
     f->cs = 0x08; f->ss = 0x10; f->rflags = 0x202;
     f->rsp = top - 8;
-    *t = (struct thread){ .name = name, .state = READY, .prio = prio, .stamp = ++seq,
+    *t = (struct thread){ .name = name, .state = READY, .prio = prio, .stamp = ++seq, .ready_tsc = rdtsc(),
                           .stack = stack, .stack_pages = pages, .saved = f };
     irq_restore(fl);
     return slot;
@@ -98,7 +101,7 @@ int thread_info(int id, struct thread_info *o)
 {
     if (id < 0 || id >= SCHED_MAX_THREADS || threads[id].state == UNUSED) return -1;
     struct thread *t = &threads[id];
-    *o = (struct thread_info){ id, t->name, state_name[t->state], t->prio, t->runticks, (int)(t->stack_pages * 4) };
+    *o = (struct thread_info){ id, t->name, state_name[t->state], t->prio, t->runticks, (int)(t->stack_pages * 4), cycles_to_ns(t->lat_max) };
     return 0;
 }
 
@@ -110,10 +113,11 @@ static struct frame *switch_to_best(struct frame *cur, int yielded)
     t->saved = cur;
     if (!yielded) { t->runticks++; total_run++; }
 
+    u64 now = t_latstats->val ? rdtsc() : 0;
     int best = 255;
     for (int i = 0; i < SCHED_MAX_THREADS; i++) {
         struct thread *x = &threads[i];
-        if (x->state == SLEEPING && x->wake <= ticks) x->state = READY;
+        if (x->state == SLEEPING && x->wake <= ticks) { x->state = READY; x->ready_tsc = now; }
         if ((x->state == READY || x->state == RUNNING) && x->prio < best) best = x->prio;
     }
 
@@ -133,7 +137,12 @@ static struct frame *switch_to_best(struct frame *cur, int yielded)
             next = i;
     }
     if (next < 0) panic("scheduler: no runnable thread");
-    if (t->state == RUNNING) t->state = READY;
+    if (t->state == RUNNING) { t->state = READY; t->ready_tsc = now; }
+    if (now && next != current && threads[next].ready_tsc) {
+        u64 lat = now - threads[next].ready_tsc;
+        if (lat > threads[next].lat_max) threads[next].lat_max = lat;
+        if (threads[next].prio <= t_rtprio->val) { rt_lat_sum += lat; rt_lat_n++; if (lat > rt_lat_max) rt_lat_max = lat; }
+    }
     threads[next].state = RUNNING;
     if (threads[next].quantum == 0) {
         threads[next].quantum = (u32)t_quantum->val;
@@ -164,5 +173,30 @@ void sched_rescale(u32 old_hz, u32 new_hz)
     ticks = ticks * new_hz / old_hz;
     for (int i = 0; i < SCHED_MAX_THREADS; i++)
         if (threads[i].state == SLEEPING) threads[i].wake = threads[i].wake * new_hz / old_hz;
+    irq_restore(fl);
+}
+
+int thread_protected(int id)
+{
+    static const char *const core[] = { "idle", "console", "net", "varbus", "init", "agentd", "ui", "shell" };
+    if (id < 0 || id >= SCHED_MAX_THREADS || threads[id].state == UNUSED) return 1;
+    for (unsigned i = 0; i < sizeof core / sizeof *core; i++) if (!strcmp(threads[id].name, core[i])) return 1;
+    return 0;
+}
+
+void sched_latency(u64 *max_ns, u64 *avg_ns, u64 *n)
+{
+    u64 fl = irq_save();
+    *n = rt_lat_n;
+    *max_ns = cycles_to_ns(rt_lat_max);
+    *avg_ns = rt_lat_n ? cycles_to_ns(rt_lat_sum / rt_lat_n) : 0;
+    irq_restore(fl);
+}
+
+void sched_latency_reset(void)
+{
+    u64 fl = irq_save();
+    rt_lat_max = rt_lat_sum = rt_lat_n = 0;
+    for (int i = 0; i < SCHED_MAX_THREADS; i++) threads[i].lat_max = 0;
     irq_restore(fl);
 }

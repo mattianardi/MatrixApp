@@ -134,3 +134,29 @@ int kvsnprintf(char *buf, size_t n, const char *fmt, va_list ap)
     if (n) buf[s.len < n ? s.len : n - 1] = 0;
     return (int)s.len;
 }
+
+static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+int b64_encode(const void *in, size_t n, char *out, size_t on)
+{
+    const u8 *p = in; size_t o = 0;
+    if (((n + 2) / 3) * 4 + 1 > on) return -1;
+    for (size_t i = 0; i < n; i += 3) {
+        u32 v = (u32)p[i] << 16 | (i + 1 < n ? p[i + 1] << 8 : 0) | (i + 2 < n ? p[i + 2] : 0);
+        out[o++] = B64[v >> 18]; out[o++] = B64[(v >> 12) & 63];
+        out[o++] = i + 1 < n ? B64[(v >> 6) & 63] : '='; out[o++] = i + 2 < n ? B64[v & 63] : '=';
+    }
+    out[o] = 0;
+    return (int)o;
+}
+
+int b64_decode(const char *in, void *out, size_t on)
+{
+    u8 *o = out; size_t n = 0; u32 acc = 0; int bits = 0;
+    for (; *in && *in != '='; in++) {
+        const char *p = strchr(B64, *in);
+        if (!p || !*in) return -1;
+        acc = acc << 6 | (u32)(p - B64); bits += 6;
+        if (bits >= 8) { bits -= 8; if (n >= on) return -1; o[n++] = (u8)(acc >> bits); }
+    }
+    return (int)n;
+}

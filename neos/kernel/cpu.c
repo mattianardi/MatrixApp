@@ -35,3 +35,21 @@ int cpu_invariant_tsc(void)
     if (a >= 0x80000007) { cpuid(0x80000007, &a, &b, &c, &d); inv_tsc = (d >> 8) & 1; }
     return inv_tsc;
 }
+
+int cpu_has_rdrand(void)
+{
+    u32 a, b, cc, d;
+    cpuid(1, &a, &b, &cc, &d);
+    return (cc >> 30) & 1;
+}
+
+int hw_random(u64 *v)
+{
+    if (!cpu_has_rdrand()) return -1;
+    for (int i = 0; i < 10; i++) {
+        u64 x; unsigned char ok;
+        __asm__ volatile("rdrand %0; setc %1" : "=r"(x), "=qm"(ok));
+        if (ok) { *v = x; return 0; }
+    }
+    return -1;
+}

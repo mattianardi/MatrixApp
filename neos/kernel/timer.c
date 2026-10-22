@@ -6,6 +6,7 @@ static u64 tick_ns = 1000000;
 static u64 now_ns, last_tick_tsc, tsc_per_sec;
 static u64 cal_tsc0, cal_ns0;
 static u64 j_min = ~0ull, j_max, j_sum, j_n;      /* inter-tick period, TSC cycles */
+static u64 isr_sum, isr_max, isr_n;
 static struct tunable *t_hz;
 
 static int hz_cb(struct tunable *t, i64 v, const char *s)
@@ -35,7 +36,7 @@ void timer_set_hz(u32 want)
     tick_ns = (u64)div * 1000000000ull / 1193182ull;
     outb(0x43, 0x34); outb(0x40, div & 0xFF); outb(0x40, div >> 8);
     j_min = ~0ull; j_max = j_sum = j_n = 0; last_tick_tsc = 0;
-    tsc_per_sec = 0; cal_tsc0 = 0;
+    isr_sum = isr_max = isr_n = 0;
     irq_restore(fl);
 }
 
@@ -86,5 +87,21 @@ void timer_jitter_reset(void)
 {
     u64 fl = irq_save();
     j_min = ~0ull; j_max = j_sum = j_n = 0;
+    isr_sum = isr_max = isr_n = 0;
+    irq_restore(fl);
+}
+
+u64 cycles_to_ns(u64 c) { return cyc_to_ns(c); }
+
+void timer_isr_account(u64 cycles)
+{
+    isr_sum += cycles; isr_n++;
+    if (cycles > isr_max) isr_max = cycles;
+}
+
+void timer_isr_stats(u64 *avg, u64 *max, u64 *n)
+{
+    u64 fl = irq_save();
+    *n = isr_n; *avg = isr_n ? isr_sum / isr_n : 0; *max = isr_max;
     irq_restore(fl);
 }

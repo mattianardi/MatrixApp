@@ -40,6 +40,8 @@ static int tokenize(char *s, char **argv, int max)
     return n;
 }
 
+int shell_tokenize(char *s, char **argv, int max) { return tokenize(s, argv, max); }
+
 /* expand variables, leaving '...' spans untouched */
 static void expand_line(const char *in, char *out, size_t n)
 {

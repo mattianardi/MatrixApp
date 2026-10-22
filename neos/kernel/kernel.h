@@ -43,7 +43,9 @@ int    memcmp(const void *a, const void *b, size_t n);
 void  *memset(void *d, int c, size_t n);
 void  *memcpy(void *d, const void *s, size_t n);
 void  *memmove(void *d, const void *s, size_t n);
-int    parse_i64(const char *s, i64 *out);          /* dec / 0x hex, optional sign; 0 = ok */
+int    parse_i64(const char *s, i64 *out);
+int    b64_encode(const void *in, size_t n, char *out, size_t on);   /* returns length or -1 */
+int    b64_decode(const char *in, void *out, size_t on);             /* returns bytes or -1 */          /* dec / 0x hex, optional sign; 0 = ok */
 typedef void (*fmt_out)(char c, void *ctx);
 void   kvformat(fmt_out out, void *ctx, const char *fmt, va_list ap);
 int    ksnprintf(char *buf, size_t n, const char *fmt, ...);
@@ -80,6 +82,9 @@ u64    tsc_hz(void);
 u64    ms_to_ticks(u64 ms);
 void   timer_jitter(u64 *min_ns, u64 *max_ns, u64 *avg_ns, u64 *n);
 void   timer_jitter_reset(void);
+void   timer_isr_account(u64 cycles);
+void   timer_isr_stats(u64 *avg_cycles, u64 *max_cycles, u64 *n);
+u64    cycles_to_ns(u64 cycles);
 
 /* ---- interrupts.c ---- */
 void idt_init(void);
@@ -104,6 +109,7 @@ enum { TT_INT, TT_BOOL, TT_STR };
 #define TF_LIVE   1     /* changes apply immediately */
 #define TF_BOOT   2     /* stored as pending, applies at the next boot (boot args / saved config) */
 #define TF_RO     4
+#define TF_NOAGENT 8    /* never modifiable by an agent, whatever its capabilities */
 struct tunable;
 typedef int (*tune_cb)(struct tunable *t, i64 newval, const char *newstr);   /* 0 = accept */
 struct tunable {
@@ -136,13 +142,15 @@ void   module_get(int i, const char **name, const char **version, const char **d
 void splash_info(const char *label, void (*fmt)(char *buf, size_t n));
 void splash_show(void);
 const char *cpu_brand(void);
+int  cpu_has_rdrand(void);
+int  hw_random(u64 *v);
 int  cpu_invariant_tsc(void);
 
 /* ---- sched.c: static-priority preemptive, 0 = highest ---- */
 #define SCHED_MAX_THREADS 32
 #define SCHED_PRIO_IDLE   7
 typedef void (*thread_fn)(void *);
-struct thread_info { int id; const char *name; const char *state; int prio; u64 runticks; int stack_kib; };
+struct thread_info { int id; const char *name; const char *state; int prio; u64 runticks; int stack_kib; u64 lat_max_ns; };
 void sched_init(void);
 int  thread_create(const char *name, u8 prio, thread_fn fn, void *arg);
 int  thread_self(void);
@@ -157,6 +165,9 @@ struct frame *sched_on_yield(struct frame *f);
 void sched_rescale(u32 old_hz, u32 new_hz);
 void sched_register_tunables(void);
 u64  sched_runticks_total(void);
+int  thread_protected(int id);                       /* core system threads agents may never touch */
+void sched_latency(u64 *max_ns, u64 *avg_ns, u64 *n);   /* ready->running latency of real-time-class threads */
+void sched_latency_reset(void);
 
 /* ---- selftest.c ---- */
 int  selftest_run(void);     /* 0 = pass; blocks the calling thread */

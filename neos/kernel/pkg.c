@@ -141,6 +141,52 @@ static int npk_walk(const char *name, const u8 *d, size_t n, int write, const ch
     return -1;
 }
 
+/* validate the whole package first, then replace /opt/<name>; returns file count or -1 */
+int pkg_install_blob(const char *name, const char *ver, const u8 *d, size_t n, const char **err)
+{
+    int files = npk_walk(name, d, n, 0, err);
+    if (files < 0) return -1;
+    char root[64], rec[64];
+    ksnprintf(root, sizeof root, "/opt/%s", name);
+    fs_remove_tree(root);
+    npk_walk(name, d, n, 1, err);
+    ksnprintf(rec, sizeof rec, "/var/pkg/%s", name);
+    fs_write(rec, ver, strlen(ver));
+    return files;
+}
+
+/* pack /src-style directory `dir` (absolute, normalized) into /var/dist/<name>-<ver>.npk */
+int pkg_build(const char *name, const char *ver, const char *dir, char *outpath, size_t on, char sha[65], size_t *size, const char **err)
+{
+    size_t dl = strlen(dir), cap = 4096, len = 0;
+    u8 *buf = kmalloc(cap);
+    if (!buf) { *err = "out of memory"; return -1; }
+    #define NEED(k) do { if (len + (k) > cap) { size_t nc = cap; while (nc < len + (k)) nc *= 2; u8 *nb = kmalloc(nc); \
+        if (!nb) { kfree(buf); *err = "out of memory"; return -1; } memcpy(nb, buf, len); kfree(buf); buf = nb; cap = nc; } } while (0)
+    NEED(5); memcpy(buf, "NPK1\n", 5); len = 5;
+    int files = 0; char p[128]; size_t sz;
+    for (int i = 0; !fs_info(i, p, sizeof p, &sz); i++) {
+        if (strncmp(p, dir, dl) || p[dl] != '/') continue;
+        const u8 *d; size_t n;
+        if (fs_read(p, &d, &n)) continue;
+        char hdr[96]; int hl = ksnprintf(hdr, sizeof hdr, "F %s %lu\n", p + dl + 1, (u64)n);
+        NEED((size_t)hl + n + 1);
+        memcpy(buf + len, hdr, hl); len += hl; memcpy(buf + len, d, n); len += n; buf[len++] = '\n';
+        files++;
+    }
+    #undef NEED
+    if (!files) { kfree(buf); *err = "directory has no files"; return -1; }
+    if (len + 4 > cap) { u8 *nb = kmalloc(len + 4); if (!nb) { kfree(buf); *err = "out of memory"; return -1; } memcpy(nb, buf, len); kfree(buf); buf = nb; }
+    memcpy(buf + len, "END\n", 4); len += 4;
+    ksnprintf(outpath, on, "/var/dist/%s-%s.npk", name, ver);
+    sha256_hex(buf, len, sha);
+    int r = fs_write(outpath, buf, len);
+    kfree(buf);
+    if (r) { *err = "filesystem full"; return -1; }
+    *size = len;
+    return files;
+}
+
 int pkg_install(const char *name, const char **err)
 {
     struct pent *p = NULL;
@@ -153,14 +199,9 @@ int pkg_install(const char *name, const char **err)
     char h[65]; sha256_hex(b, n, h);
     if (n != p->size) { *err = "size differs from the index"; kfree(b); return -1; }
     if (strcasecmp(h, p->sha)) { *err = "SHA-256 mismatch: package corrupted or tampered"; kfree(b); return -1; }
-    int files = npk_walk(p->name, b, n, 0, err);            /* validate everything before touching the filesystem */
-    if (files < 0) { kfree(b); return -1; }
-    char root[64]; ksnprintf(root, sizeof root, "/opt/%s", p->name);
-    fs_remove_tree(root);
-    npk_walk(p->name, b, n, 1, err);
-    char rec[64]; ksnprintf(rec, sizeof rec, "/var/pkg/%s", p->name);
-    fs_write(rec, p->ver, strlen(p->ver));
+    int files = pkg_install_blob(p->name, p->ver, b, n, err);
     kfree(b);
+    if (files < 0) return -1;
     kprintf("installed %s %s: %d files in /opt/%s (sha256 verified)\n", p->name, p->ver, files, p->name);
     return 0;
 }

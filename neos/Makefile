@@ -9,10 +9,11 @@ LDFLAGS := -T kernel/linker.ld -nostdlib -static -z max-page-size=0x1000
 CSRC := $(wildcard kernel/*.c)
 OBJS := $(BUILD)/boot.o $(BUILD)/isr.o $(patsubst kernel/%.c,$(BUILD)/%.o,$(CSRC))
 
+AGENT_CHAN ?= -serial unix:$(BUILD)/agent.sock,server,nowait
 NIC ?= -nic user,model=e1000
 KARGS ?=
 QEMU = qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -m 128 -display none -append "$(KARGS)" \
-        -serial stdio -no-reboot $(NIC) -device isa-debug-exit,iobase=0xf4,iosize=0x04
+        -cpu max -serial stdio $(AGENT_CHAN) -no-reboot $(NIC) -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 all: $(BUILD)/matrix32.elf
 
@@ -41,6 +42,7 @@ test: all
 	@timeout 30 $(QEMU); rc=$$?; if [ $$rc -eq 33 ]; then echo "TEST OK"; else echo "TEST FAILED (rc=$$rc)"; exit 1; fi
 	@$(MAKE) --no-print-directory shelltest
 	@$(MAKE) --no-print-directory nettest
+	@$(MAKE) --no-print-directory agenttest
 
 shelltest: all
 	@tools/check-shell.sh
@@ -48,7 +50,10 @@ shelltest: all
 nettest: all
 	@tools/check-net.sh
 
+agenttest: all
+	@python3 tools/check-agent.py | tail -1
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test shelltest nettest clean
+.PHONY: all run test shelltest nettest agenttest clean

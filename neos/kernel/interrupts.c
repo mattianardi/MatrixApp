@@ -50,7 +50,13 @@ struct frame *isr_dispatch(struct frame *f)
     if (f->vec < 48) {
         u8 irq = (u8)(f->vec - 32);
         pic_eoi(irq);
-        if (irq == 0) { timer_tick(); return sched_on_tick(f); }
+        if (irq == 0) {
+            u64 t0 = rdtsc();
+            timer_tick();
+            struct frame *n = sched_on_tick(f);
+            timer_isr_account(rdtsc() - t0);
+            return n;
+        }
         if (irq_fn[irq]) irq_fn[irq]();
         return f;
     }

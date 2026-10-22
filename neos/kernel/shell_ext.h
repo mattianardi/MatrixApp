@@ -12,6 +12,7 @@ int c_write(int argc, char **argv, struct ctx *c);
 int c_cd(int argc, char **argv, struct ctx *c);
 int c_pwd(int argc, char **argv, struct ctx *c);
 int c_pkg(int argc, char **argv, struct ctx *c);
+int c_agent(int argc, char **argv, struct ctx *c);
 int c_sha256(int argc, char **argv, struct ctx *c);
 
 #define SHELL_EXT_CMDS \
@@ -26,5 +27,6 @@ int c_sha256(int argc, char **argv, struct ctx *c);
     { "write",    "write <file> <text>",       "create a file with text",                    c_write,    0, 0 }, \
     { "cd",       "cd <dir>",                  "change directory ($PWD is shared with both worlds)", c_cd, 0, 0 }, \
     { "pwd",      "pwd",                       "current directory",                          c_pwd,      0, 0 }, \
+    { "agent",    "agent [list|tools|add|grant|revoke|policy|pending|approve|deny|log|journal|rollback|freeze|call|tuner]", "AI agents: identities, capabilities, approvals, audit", c_agent, 1, 0 }, \
     { "sha256",   "sha256 <file>",             "SHA-256 of a file",                          c_sha256,   0, 0 }, \
     { "pkg",      "pkg [update|list|info|install|remove] [name]", "package manager",        c_pkg,      1, 0 },

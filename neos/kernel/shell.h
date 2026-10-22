@@ -26,6 +26,7 @@ int  tb_filter(struct table *t, int argc, char **argv, const char **err);
 
 /* shell */
 void shell_start(void);
+int  shell_tokenize(char *s, char **argv, int max);
 int  shell_eval_table(const char *pipeline, struct table *out, const char **err);   /* pure commands only */
 const char *shell_prompt_hint(void);
 

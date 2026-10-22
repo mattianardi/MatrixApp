@@ -8,5 +8,5 @@ QEMU_EXTRA=${QEMU_EXTRA:-}
   for c in "$@"; do printf '%s\n' "$c"; sleep ${NEOS_STEP:-0.4}; done
   printf 'poweroff\n'; sleep 1
 } | timeout ${NEOS_TIMEOUT:-60} qemu-system-x86_64 -kernel build/matrix32.elf -m 128 -display none \
-      -serial stdio -no-reboot -append "${KARGS:-}" $QEMU_EXTRA 2>&1 \
+      -cpu max -serial stdio ${AGENT_CHAN:--serial null} -no-reboot -append "${KARGS:-}" $QEMU_EXTRA 2>&1 \
   | { if [ -n "$NEOS_RAW" ]; then cat; else sed 's/\x1b\[[0-9;]*[A-Za-z]//g'; fi; }
