@@ -139,7 +139,8 @@ def wrappers(files, pkg):
 
 def neosctl(*a):
     import subprocess
-    subprocess.run(["/bin/neosctl", *a], stdout=subprocess.DEVNULL)
+    r = subprocess.run(["/bin/neosctl", *a], capture_output=True, text=True)
+    if r.returncode: say(f"warning: could not register {a[1]} in the package registry: {(r.stderr or r.stdout).strip()}")
 
 def install(names, c):
     idx = load_index(); have = installed()
