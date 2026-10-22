@@ -67,6 +67,7 @@ static void finish(struct proc *p, int wstatus, i64 shell_code)
 
 static void reap_one(struct proc *p)
 {
+    dbg_free_what = "reap"; dbg_free_pid = p->pid;
     vm_free(&p->as);
     if (p->principal) { agent_remove(p->principal->name); p->principal = NULL; }
     p->state = P_EXITED;
@@ -345,7 +346,7 @@ int proc_execve(struct proc *p, struct frame *f, const char *path, struct argblo
     p->as = *na;
     kfree(na);
     sched_switch_cr3(p->as.pml4);
-    if (old) { vm_free(old); kfree(old); }
+    if (old) { dbg_free_what = "exec-old"; dbg_free_pid = p->pid; vm_free(old); kfree(old); }
     fdt_close_cloexec(p->fds);
     for (int i = 1; i <= 64; i++) if (p->sig[i].handler != 1) memset(&p->sig[i], 0, sizeof p->sig[i]);    /* exec: caught signals revert to default, ignored stay ignored */
     p->sigpending = 0; p->alarm_at = 0;

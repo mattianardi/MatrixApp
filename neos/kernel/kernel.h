@@ -117,6 +117,7 @@ void irq_register(u8 irq, void (*fn)(void));
 void   pmm_init(const void *mbi);
 u64    pmm_alloc(size_t pages);          /* contiguous, 0 on failure */
 void   pmm_free(u64 addr, size_t pages);
+extern const char *dbg_free_what; extern int dbg_free_pid;      /* who is releasing memory: shown if a double free is detected */
 size_t pmm_free_pages(void);
 size_t pmm_total_pages(void);
 void   heap_init(void);

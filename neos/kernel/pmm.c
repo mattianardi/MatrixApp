@@ -1,4 +1,5 @@
 #include "kernel.h"
+const char *dbg_free_what = "?"; int dbg_free_pid;
 
 #define PAGE 4096
 #define MAX_PAGES (1u << 18)            /* 1 GiB, what boot.asm identity-maps */
@@ -63,7 +64,7 @@ void pmm_free(u64 addr, size_t pages)
 {
     for (size_t i = 0; i < pages; i++) {
         u64 pg = addr / PAGE + i;
-        if (!(bitmap[pg / 32] & (1u << (pg % 32)))) panic("pmm: double free of physical page %lx (caller %p)", pg * PAGE, __builtin_return_address(0));
+        if (!(bitmap[pg / 32] & (1u << (pg % 32)))) panic("pmm: double free of physical page %lx (caller %p, free context: %s pid %d)", pg * PAGE, __builtin_return_address(0), dbg_free_what, dbg_free_pid);
         mark(pg, 0);
     }
 }
