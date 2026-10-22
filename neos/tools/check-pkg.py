@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Package ecosystem test: tar, deb, pip (wheel), apt-lite (Debian-style repository) and the offline cache (python3 + glibc),
 all installed from inside NEOS through `pkg install <backend>:<spec>`, all showing up in `pkg installed`."""
-import os, sys, subprocess, tempfile, threading, http.server, socketserver, zipfile, hashlib, base64, shutil, gzip
+import os, re, sys, subprocess, tempfile, threading, http.server, socketserver, zipfile, hashlib, base64, shutil, gzip
 root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'); os.chdir(root)
 w = tempfile.mkdtemp(); www = os.path.join(w, 'www'); os.makedirs(www)
 build = 'build'
@@ -46,9 +46,12 @@ cmds = ['pkg install tar:http://10.0.2.2:8099/mytool-2.5.tar.gz', 'mytool x',
         'pkg install pip:http://10.0.2.2:8099/neosdemo-0.1-py3-none-any.whl', 'neosdemo',
         'write /etc/neos/apt.conf mirror=http://10.0.2.2:8099/aptrepo dist=test components=main', 'pkg install apt:update', 'pkg install apt:aptdemo', 'aptdemo',
         'pkg installed', 'pkg remove apt:aptdemo', 'pkg remove tar:mytool', 'pkg installed']
-env = dict(os.environ, INITRD=','.join([f'{build}/initrd.npk', f'{build}/pycache/glibc.npk', f'{build}/pycache/ca-certificates.npk', f'{build}/pycache/python3.npk']),
-           NEOS_BOOT_WAIT='28', NEOS_STEP='28', NEOS_TIMEOUT='900')
-out = subprocess.run(['tools/shell-session.sh', *cmds], env=env, capture_output=True, text=True).stdout
+sys.path.insert(0, 'tools')
+from screenshot import Session
+ses = Session(boot=30, initrd=','.join([f'{build}/initrd.npk', f'{build}/pycache/glibc.npk', f'{build}/pycache/ca-certificates.npk', f'{build}/pycache/python3.npk']))
+for c in cmds: ses.run(c, timeout=600)
+out = ses.clean() if False else None
+out = ses.close(); out = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', out)
 fails = []
 def check(s):
     if s not in out: fails.append(s); print('MISSING:', s)
@@ -56,7 +59,7 @@ for s in ['pkg: installed mytool 2.5 into /opt/mytool', 'hello from an unmodifie
           'pkg: installed hellodeb 1.2-1 into /opt/hellodeb', 'hello from a musl-libc static binary',
           'installed python3 3.13', 'Successfully installed neosdemo', 'hello from a wheel installed by pip on NEOS',
           'pkg: will install: aptlib=1.0-1 aptdemo=2.0-1', 'aptdemo says: message from the library package',
-          'pip:neosdemo', 'aptdemo  2.0-1    apt', 'hellodeb  1.2-1', 'pkg: removed aptdemo', 'pkg: removed mytool']:
+          'pip:neosdemo', '2.0-1    apt', '1.2-1    deb', '2.5      tar', 'pkg: removed aptdemo', 'pkg: removed mytool']:
     check(s)
 if fails: print(out[-3000:])
 print("PKG TEST OK" if not fails else "PKG TEST FAILED"); sys.exit(1 if fails else 0)

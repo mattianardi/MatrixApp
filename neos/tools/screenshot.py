@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Boot NEOS, optionally drive the shell over serial and the mouse through the QEMU monitor, save PNG screenshots.
    tools/screenshot.py out_prefix [--cmd 'shell command']... [--mouse 'dx dy' | --click | --release]... [--shot name]"""
-import socket, subprocess, sys, time, os, zlib, struct, tempfile, threading
+import socket, subprocess, sys, time, os, zlib, struct, tempfile, threading, re
 def ppm_to_png(ppm, png):
     d = open(ppm, 'rb').read()
     parts = d.split(b'\n', 3)
@@ -12,11 +12,11 @@ def ppm_to_png(ppm, png):
     return w, h, pix
 
 class Session:
-    def __init__(self, boot=14):
+    def __init__(self, boot=14, initrd='build/initrd.npk'):
         self.dir = tempfile.mkdtemp()
         self.mon = os.path.join(self.dir, 'mon.sock')
         os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-        self.p = subprocess.Popen(['qemu-system-x86_64', '-kernel', 'build/matrix32.elf', '-initrd', 'build/initrd.npk', '-m', '512', '-display', 'none',
+        self.p = subprocess.Popen(['qemu-system-x86_64', '-kernel', 'build/matrix32.elf', '-initrd', initrd, '-m', '512', '-display', 'none',
             '-cpu', 'max', '-serial', 'stdio', '-no-reboot', '-vga', 'std', '-nic', 'user,model=e1000', '-monitor', f'unix:{self.mon},server,nowait'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.out = ''
@@ -28,6 +28,15 @@ class Session:
             b = self.p.stdout.read1(4096) if hasattr(self.p.stdout, 'read1') else self.p.stdout.read(1)
             if not b: break
             self.out += b.decode('latin1')
+    def clean(self): return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', self.out)
+    def run(self, cmd, timeout=300):
+        """Type a command and wait until the shell prints its next prompt (long-running programs included)."""
+        mark = len(self.clean()); self.p.stdin.write(cmd.encode() + b'\n'); self.p.stdin.flush()
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            time.sleep(0.5); c = self.clean()[mark:]
+            if c.rstrip().endswith('neos>') and len(c) > len(cmd) + 2: return c
+        return self.clean()[mark:]
     def expect(self, text, timeout=60):
         t0 = time.time()
         while time.time() - t0 < timeout:
