@@ -617,6 +617,14 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 19: RET(sys_readv(p, (int)a0, a1, (long)a2, 0));
     case 20: RET(sys_readv(p, (int)a0, a1, (long)a2, 1));
     case 7:  RET(sys_poll(p, a0, a1, (int)a2));
+    case 436: {                                                           /* close_range(first, last, flags): subprocess/spawn use it to close everything above stderr */
+        u64 lo = a0, hi = a1 < MAX_FDS ? a1 : MAX_FDS - 1;
+        for (u64 fd = lo; fd <= hi; fd++) {
+            if (!fdt_get(p->fds, (int)fd)) continue;
+            if (a2 & 4) p->fds->cloexec[fd] = 1; else fdt_close(p->fds, (int)fd);
+        }
+        RET(0);
+    }
     case 40: {                                                            /* sendfile(out, in, *offset, count) */
         struct file *o = fdt_get(p->fds, (int)a0), *in = fdt_get(p->fds, (int)a1);
         if (!o || !in) RET(-E_BADF);
