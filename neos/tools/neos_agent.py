@@ -7,7 +7,7 @@ bridge on real hardware). Usable directly from an LLM tool loop:
     schema = a.tools()                        # JSON tool schemas for the model
     a.call("tune.set", "sched.quantum", "5")  # -> dict, or raises NeosError(code, message)
 """
-import base64, json, shlex, socket, time
+import base64, collections, json, shlex, socket, time
 
 
 class NeosError(Exception):
@@ -19,6 +19,7 @@ class NeosError(Exception):
 class NeosAgent:
     def __init__(self, sock):
         self.sock, self.buf, self.seq = sock, b"", 0
+        self.events = collections.deque()
 
     @classmethod
     def unix(cls, path, timeout=30):
@@ -51,7 +52,12 @@ class NeosAgent:
     def call(self, tool, *args, raw=False):
         self.seq += 1
         self._send(f"CALL {self.seq} {tool} " + " ".join(shlex.quote(str(x)) if not str(x).isalnum() else str(x) for x in args))
-        r = self._line()
+        while True:
+            r = self._line()
+            if r.startswith("EVT "):                      # server push (AIH request): keep it for next_event()
+                self.events.append(r)
+                continue
+            break
         parts = r.split(" ", 3)
         if parts[0] == "OK":
             return parts[2] if raw else json.loads(r.split(" ", 2)[2])
@@ -75,3 +81,40 @@ class NeosAgent:
             off += r["len"]
             if off >= r["size"]:
                 return out
+
+    # AIH: be the AI behind NEOS's "aih" command ------------------------------------------------------------
+    def aih_subscribe(self):
+        self._send("SUB aih")
+        while True:
+            r = self._line()
+            if r.startswith("EVT "):
+                self.events.append(r)
+            else:
+                if not r.startswith("OK"):
+                    raise NeosError(403, r)
+                return
+
+    def next_aih_request(self, timeout=None):
+        """Returns (id, request_text, context) for the next `aih ...` typed on the NEOS console."""
+        old = self.sock.gettimeout()
+        self.sock.settimeout(timeout)
+        try:
+            while not self.events:
+                r = self._line()
+                if r.startswith("EVT "):
+                    self.events.append(r)
+        finally:
+            self.sock.settimeout(old)
+        _, kind, rid, req, ctx = self.events.popleft().split(" ", 4)
+        return int(rid), base64.b64decode(req).decode(), base64.b64decode(ctx).decode()
+
+    def aih_answer(self, rid, plan_text):
+        """plan_text: lines `SAY <explanation>` and `STEP <neos|linux|windows|nio> <low|medium|high> <command>`."""
+        return self.call("aih.answer", rid, base64.b64encode(plan_text.encode()).decode())
+
+    def aih_serve(self, planner):
+        """Serve forever: planner(request, context) -> plan text. `planner` is where an LLM call goes."""
+        self.aih_subscribe()
+        while True:
+            rid, req, ctx = self.next_aih_request()
+            self.aih_answer(rid, planner(req, ctx))

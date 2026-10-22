@@ -1,0 +1,11 @@
+9 5 14 3.5 1 49
+2 1024 2 8.0
+hello NEOS, 2+3=5, upper=NEOS
+abbb 6 b bcd ef
+true false false true true true true
+int float str list map nil bool fn
+43 5.0 12! 3
+true {raw}
+i = 3
+three
+31 1000

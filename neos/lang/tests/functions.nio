@@ -1,0 +1,26 @@
+fn fact(n) { if n <= 1 { return 1 } return n * fact(n - 1) }
+fn fib(n) { if n < 2 { return n } return fib(n - 1) + fib(n - 2) }
+println(fact(10), fib(15))
+fn counter() {
+    let c = 0
+    return fn() { c += 1; return c }
+}
+let c1 = counter()
+let c2 = counter()
+c1(); c1()
+println(c1(), c2())
+let add = |a, b| a + b
+let twice = |f, x| f(f(x))
+println(add(2, 3), twice(|x| x * 3, 2), (|x| x + 1)(1))
+fn compose(f, g) { return |x| g(f(x)) }
+println(compose(|x| x + 1, |x| x * 10)(4))
+let total = 0
+for n in range(1, 101) { if n % 2 == 0 { continue } if n > 10 { break } total += n }
+println(total)
+fn early(x) { for i in range(10) { if i == x { return "found {i}" } } return "none" }
+println(early(4), early(40))
+println(range(5) |> map(|x| x * x) |> filter(|x| x % 2 == 0))
+let result = [3, 1, 2]
+    |> sort()
+    |> map(|x| x * 100)
+println(result)

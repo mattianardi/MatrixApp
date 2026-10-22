@@ -17,6 +17,26 @@ static struct tunable *t_prio, *t_env_max;
 #define MMAP_BASE  0x00007E0000000000ull
 #define INTERP_BASE 0x00007FF000000000ull
 
+/* binfmt: how non-ELF files are started. A registered extension is run through its interpreter (like a #! line). */
+static struct { char ext[12], interp[48], arg[24]; } binfmts[12] = { { ".nio", "/bin/nio", "" }, { ".sh", "/bin/busybox", "sh" } };
+static int nbinfmt = 2;
+int binfmt_add(const char *ext, const char *interp, const char *arg)
+{
+    for (int i = 0; i < nbinfmt; i++) if (!strcmp(binfmts[i].ext, ext)) { strlcpy(binfmts[i].interp, interp, 48); strlcpy(binfmts[i].arg, arg ? arg : "", 24); return 0; }
+    if (nbinfmt == 12) return -1;
+    strlcpy(binfmts[nbinfmt].ext, ext, 12); strlcpy(binfmts[nbinfmt].interp, interp, 48); strlcpy(binfmts[nbinfmt].arg, arg ? arg : "", 24);
+    nbinfmt++;
+    return 0;
+}
+int binfmt_remove(const char *ext) { for (int i = 0; i < nbinfmt; i++) if (!strcmp(binfmts[i].ext, ext)) { binfmts[i] = binfmts[--nbinfmt]; return 0; } return -1; }
+int binfmt_get(int i, char *ext, char *interp, char *arg) { if (i < 0 || i >= nbinfmt) return -1; strlcpy(ext, binfmts[i].ext, 12); strlcpy(interp, binfmts[i].interp, 48); strlcpy(arg, binfmts[i].arg, 24); return 0; }
+static const struct { char ext[12], interp[48], arg[24]; } *binfmt_for(const char *path)
+{
+    size_t pl = strlen(path);
+    for (int i = 0; i < nbinfmt; i++) { size_t el = strlen(binfmts[i].ext); if (pl > el && !strcasecmp(path + pl - el, binfmts[i].ext)) return (void *)&binfmts[i]; }
+    return NULL;
+}
+
 static const char *base_name(const char *s) { const char *b = s; for (; *s; s++) if (*s == '/') b = s + 1; return b; }
 
 struct proc *proc_current(void) { return sched_current_proc(); }
@@ -164,9 +184,32 @@ static int load_image(struct proc *p, struct aspace *as, const char *path, struc
     if (!strcmp(path, "/proc/self/exe")) strlcpy(full, p->exe, sizeof full);
     else fs_norm_at(p->cwd[0] ? p->cwd : "/", path, full, sizeof full);
     struct inode *ino = vfs_lookup(full);
+    for (int hops = 0; ino && (ino->mode & S_IFMT) == S_IFLNK && hops < 8; hops++) {          /* /bin/ls -> busybox */
+        char dir[128], tgt[128]; strlcpy(dir, ino->path, sizeof dir);
+        char *sl = dir + strlen(dir); while (sl > dir && *sl != '/') sl--; *sl = 0;
+        fs_norm_at(dir[0] ? dir : "/", ino->link, tgt, sizeof tgt);
+        strlcpy(full, tgt, sizeof full);
+        ino = vfs_lookup(full);
+    }
     if (!ino) { *err = "no such file"; return -1; }
     if ((ino->mode & S_IFMT) != S_IFREG) { *err = "not a regular file"; return -1; }
     img = ino->data; n = ino->size;
+
+    if (n >= 4 && !(img[0] == 0x7f && img[1] == 'E') && !(img[0] == '#' && img[1] == '!')) {      /* not ELF, not #!: ask the binfmt registry */
+        const typeof(binfmts[0]) *bf = binfmt_for(full);
+        if (bf && depth < 4) {
+            struct argblock *nb = argblock_new();
+            if (!nb) { *err = "out of memory"; return -1; }
+            argblock_add(nb, 0, bf->interp);
+            if (bf->arg[0]) argblock_add(nb, 0, bf->arg);
+            argblock_add(nb, 0, full);
+            for (int i = 1; i < ab->argc; i++) argblock_add(nb, 0, ab->argv[i]);
+            for (int i = 0; i < ab->envc; i++) argblock_add(nb, 1, ab->envp[i]);
+            int r = load_image(p, as, bf->interp, nb, depth + 1, entry, sp, brk_start, err);
+            argblock_free(nb);
+            return r;
+        }
+    }
 
     if (n >= 3 && img[0] == '#' && img[1] == '!') {                         /* #!interpreter [arg] */
         if (depth >= 4) { *err = "too many nested interpreters"; return -1; }

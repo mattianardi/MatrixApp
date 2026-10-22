@@ -8,7 +8,7 @@
  * that can undo what it changed. Every agent action goes through agent_call() - the only gate.
  * Capabilities are granted by the human operator only; an agent can never widen its own.
  */
-enum { CAP_OBSERVE, CAP_TUNE, CAP_THREAD, CAP_VARS, CAP_FSR, CAP_FSW, CAP_PKG, CAP_NET, CAP_DEBUG, CAP_EXP, CAP_ADMIN, NCAPS };
+enum { CAP_OBSERVE, CAP_TUNE, CAP_THREAD, CAP_VARS, CAP_FSR, CAP_FSW, CAP_PKG, CAP_NET, CAP_DEBUG, CAP_EXP, CAP_ADMIN, CAP_AIH, NCAPS };
 extern const char *const cap_names[NCAPS];
 enum { RISK_READ, RISK_REV, RISK_IRREV };
 enum { POL_ALLOW, POL_ASK, POL_DENY };

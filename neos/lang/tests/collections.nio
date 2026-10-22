@@ -1,0 +1,22 @@
+let xs = [5, 3, 8, 1]
+push(xs, 9)
+println(xs, len(xs), pop(xs), xs)
+println(sort(xs), sort(xs, nil, true), reverse(xs), first(xs), last(xs))
+println(range(4), range(2, 6), range(10, 0, -3), 0..3)
+println(map(xs, |x| x * 2), filter(xs, |x| x > 3), reduce(xs, |a, x| a + x, 0), sum(xs), min(xs), max(xs), min(4, 2, 9))
+println(any(xs, |x| x == 8), all(xs, |x| x > 1), contains(xs, 3), contains("hello", "ell"))
+let m = {name: "x", n: 3, "key two": true}
+m.extra = [1, 2]
+m["n"] += 4
+println(m.name, m.n, m["key two"], m.extra, has(m, "n"), has(m, "zzz"), keys(m), len(m))
+let name = "shorthand"
+println({name}, {a: 1}.a)
+for k in keys({p: 1, q: 2}) { print(k) }
+println()
+for i, v in ["a", "b"] { print("{i}{v}") }
+println()
+println(enumerate(["x", "y"]), zip([1, 2], ["a", "b"]))
+println(join(["a", 1, true], "-"), split("a,b,,c", ","), split("  two   words "), replace("aXbXc", "X", "--"))
+println(trim("  hi \n"), lower("ABC"), starts("hello", "he"), ends("hello", "lo"), find("hello", "ll"), find("hello", "z"))
+let rows = [{n: "b", v: 2}, {n: "a", v: 3}, {n: "c", v: 1}]
+println(rows |> sort(.n) |> map(.n), rows |> sort(.v, true) |> map(.n), rows |> filter(.v >= 2) |> map(.v) |> sum())

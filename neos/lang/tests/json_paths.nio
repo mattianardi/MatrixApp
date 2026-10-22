@@ -1,0 +1,8 @@
+let doc = json('{"a": [1, 2.5, "x", true, null], "b": {"c": "d"}, "n": -3}')
+println(doc.a, doc.b.c, doc.n, len(doc.a))
+println(tojson({k: [1, "two", nil, false], s: "q\"uote"}))
+println(tojson(json('[1,2,{"z":[]}]')))
+println(path.win("/mnt/c/Users/neos"), path.win("/usr/bin"), path.win("/mnt/d"), path.win("/mnt/unc/srv/share/x"))
+println(path.lin("C:\\Users\\neos"), path.lin("D:\\"), path.lin("\\\\neos\\root\\etc"), path.lin("\\\\srv\\share\\f"), path.lin("rel\\dir"))
+println(path.join("a", "b", "c"), path.base("/x/y/file.txt"), path.dir("/x/y/file.txt"), path.base("C:\\w\\f.exe"))
+println(path.lin(path.win("/mnt/c/a/b")) == "/mnt/c/a/b")

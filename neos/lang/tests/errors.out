@@ -1,0 +1,10 @@
+caught: division by zero (line 1)
+got custom
+7 boom
+undefined name 'undefined_name' (line 5)
+list index 5 out of range (line 6)
+cannot compare int with str (line 7)
+cannot convert "zz" to int (line 8)
+undefined name 'fact' (line 9)
+from function
+done

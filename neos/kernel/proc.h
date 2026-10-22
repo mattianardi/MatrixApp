@@ -53,3 +53,8 @@ long proc_wait4(struct proc *p, int pid, u64 ustatus, int options);
 struct elf_info { u64 entry, phdr, base, top, interp_base; int phnum; char interp[128]; };
 int  elf_load(struct aspace *as, const u8 *img, size_t n, u64 forced_bias, struct elf_info *out, const char **err);
 void sched_set_fsbase(u64 v);
+
+/* binfmt registry (extension -> interpreter) */
+int  binfmt_add(const char *ext, const char *interp, const char *arg);
+int  binfmt_remove(const char *ext);
+int  binfmt_get(int i, char *ext, char *interp, char *arg);

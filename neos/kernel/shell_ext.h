@@ -15,6 +15,10 @@ int c_pkg(int argc, char **argv, struct ctx *c);
 int c_run(int argc, char **argv, struct ctx *c);
 int c_proc(int argc, char **argv, struct ctx *c);
 int c_pkill(int argc, char **argv, struct ctx *c);
+int c_binfmt(int argc, char **argv, struct ctx *c);
+int c_lx(int argc, char **argv, struct ctx *c);
+int shell_try_external(int argc, char **argv, struct ctx *c);
+int c_aih(int argc, char **argv, struct ctx *c);
 int c_agent(int argc, char **argv, struct ctx *c);
 int c_sha256(int argc, char **argv, struct ctx *c);
 
@@ -33,6 +37,9 @@ int c_sha256(int argc, char **argv, struct ctx *c);
     { "run",      "run [-b] [-g cap[:scope]].. [-w lin|win] <prog> [args]", "start a program in ring 3 (its capabilities come from -g)", c_run, 0, 0 }, \
     { "proc",     "proc",                      "user processes",                             c_proc,     1, 0 }, \
     { "pkill",    "pkill <pid>",               "kill a user process",                        c_pkill,    0, 0 }, \
+    { "aih",      "aih <what you want to do>", "AI Help: say it in plain language, review the plan, confirm", c_aih, 0, 0 }, \
+    { "lx",       "lx <cmd> [args]",           "run the Linux program /bin/<cmd> (even if NEOS has a built-in)", c_lx, 0, 0 }, \
+    { "binfmt",   "binfmt [add .ext /interp [arg] | remove .ext]", "how files are started: extension -> interpreter", c_binfmt, 1, 0 }, \
     { "agent",    "agent [list|tools|add|grant|revoke|policy|pending|approve|deny|log|journal|rollback|freeze|call|tuner]", "AI agents: identities, capabilities, approvals, audit", c_agent, 1, 0 }, \
     { "sha256",   "sha256 <file>",             "SHA-256 of a file",                          c_sha256,   0, 0 }, \
     { "pkg",      "pkg [update|list|info|install|remove] [name]", "package manager",        c_pkg,      1, 0 },

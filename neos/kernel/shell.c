@@ -476,6 +476,8 @@ static int c_help(int argc, char **argv, struct ctx *c)
 }
 
 
+const char *shell_command_name(int i) { return i >= 0 && i < NCMDS ? cmds[i].name : NULL; }
+
 static const struct cmd *find_cmd(const char *name)
 {
     for (int i = 0; i < NCMDS; i++) if (!strcmp(cmds[i].name, name)) return &cmds[i];
@@ -500,7 +502,16 @@ static int eval_stages(char **st, int ns, struct table *tb, int pure, const char
     *term = 0;
     if (!argc) { *e = ""; return -1; }
     const struct cmd *cm = find_cmd(argv[0]);
-    if (!cm) { *e = "unknown command (try `help`)"; return -1; }
+    if (!cm) {
+        if (!pure) {                                                       /* a program in $PATH or a script in the cwd? */
+            char *sp0 = strchr(full, ' ');
+            struct ctx xc = { tb, sp0 ? trim(sp0) : "", pure };
+            tb->ncols = tb->nrows = tb->more = 0;
+            if (shell_try_external(argc, argv, &xc) == 0) { *e = ""; return -1; }
+        }
+        *e = "unknown command (try `help`, or `aih <what you want to do>`)";
+        return -1;
+    }
     if (pure && !cm->pure) { *e = "not a live-safe command"; return -1; }
     char *sp = strchr(full, ' ');
     struct ctx c = { tb, sp ? trim(sp) : "", pure };
@@ -569,6 +580,8 @@ static void run_line(const char *input)
     }
     if (out_tb.ncols) tb_render(&out_tb);
 }
+
+void shell_run_line(const char *line) { run_line(line); }
 
 /* ------------------------------------------------------------ line editor */
 static void redraw(const char *buf, int len, int pos)

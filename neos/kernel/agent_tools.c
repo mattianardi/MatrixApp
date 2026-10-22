@@ -3,6 +3,7 @@
 #include "net.h"
 #include "shell.h"
 #include "varbus.h"
+#include "aih.h"
 
 /* Everything an agent can do. Each tool names the capability it needs and its risk class; `check`
  * validates scopes BEFORE the operator is ever asked, `run` produces a compact JSON answer. */
@@ -643,6 +644,39 @@ static int t_rollback(struct agent *a, int argc, char **argv, struct jbuf *o)
     return 0;
 }
 
+/* ------------------------------------------------------------ AIH: planner side */
+static int t_aih_plan(struct agent *a, int argc, char **argv, struct jbuf *o)
+{
+    (void)a;
+    NEEDARGS_RUN(2, "aih.plan <request>");
+    static char plan[AIH_PLAN_MAX]; char from[16];                    /* one request at a time per caller is plenty; the tool is rare */
+    if (aih_request(argv[1], plan, sizeof plan, from, sizeof from)) return fail(o, 500, "no plan");
+    jp(o, "{\"source\":\"%s\",\"plan\":", from); jstr(o, plan); jp(o, "}");
+    return 0;
+}
+
+static int t_aih_answer(struct agent *a, int argc, char **argv, struct jbuf *o)
+{
+    NEEDARGS_RUN(3, "aih.answer <id> <base64-plan>");
+    i64 id; static char plan[AIH_PLAN_MAX];
+    if (num(argv[1], &id)) return fail(o, 400, "id must be a number");
+    int n = b64_decode(argv[2], plan, sizeof plan - 1);
+    if (n < 0) return fail(o, 400, "bad base64 (plan up to 2 KiB)");
+    plan[n] = 0;
+    if (aih_answer((int)id, plan, a->name)) return fail(o, 404, "no such pending request");
+    aih_planner_set(agent_index(a));
+    jp(o, "{\"accepted\":true}");
+    return 0;
+}
+
+static int t_aih_attach(struct agent *a, int argc, char **argv, struct jbuf *o)
+{
+    (void)argc; (void)argv;
+    aih_planner_set(agent_index(a));
+    jp(o, "{\"planner\":\"%s\"}", a->name);
+    return 0;
+}
+
 /* ------------------------------------------------------------ table */
 const struct tool agent_tools[] = {
     { "whoami",          "",                                  "your identity, capabilities and approval policy",        CAP_OBSERVE, RISK_READ, NULL, t_whoami },
@@ -676,6 +710,9 @@ const struct tool agent_tools[] = {
     { "pkg.install_file","name:str,version:str,path:str",     "install a locally built NPK package",                     CAP_PKG,     RISK_REV,  c_pkginstfile, t_pkginstfile },
     { "net.get",         "url:str,dest:str",                  "HTTP GET into a file (host must be in your net scope)",   CAP_NET,     RISK_REV,  c_netget, t_netget },
     { "debug.peek",      "addr:int,len:int",                  "read up to 128 bytes of kernel memory (read-only)",       CAP_DEBUG,   RISK_READ, c_peek, t_peek },
+    { "aih.plan",        "request:str",                       "ask the AI helper for a plan (not executed)",              CAP_AIH,     RISK_READ, NULL, t_aih_plan },
+    { "aih.answer",      "id:int,plan_b64:str",              "answer a pending AIH request with a plan (SAY / STEP lines)", CAP_AIH,  RISK_REV,  NULL, t_aih_answer },
+    { "aih.attach",      "",                                  "announce yourself as the AI planner receiving AIH requests", CAP_AIH, RISK_REV,  NULL, t_aih_attach },
     { "experiment.run",  "metric:str,window_ms:int,changes:name=value...", "apply settings, measure, keep only if better, else revert", CAP_EXP, RISK_REV, c_exp, t_exp },
 };
 const int agent_ntools = (int)(sizeof agent_tools / sizeof agent_tools[0]);

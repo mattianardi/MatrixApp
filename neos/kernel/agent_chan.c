@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "shell.h"
+#include "aih.h"
 
 /*
  * Agent channel "NAP/1" on the second serial port (COM2): a physical link, so no network exposure
@@ -37,6 +38,14 @@ static void agentd(void *arg)
     struct agent *cur = NULL;
     int len = 0, fails = 0; u64 locked_until = 0;
     for (;;) {
+        if (cur && cur->used && aih_planner_idx() == agent_index(cur)) {                 /* push pending AIH requests to the planner */
+            int id; static char rq[300], cx[900], e1[420], e2[1220], ln[1700];
+            if (!aih_event_next(&id, rq, sizeof rq, cx, sizeof cx)) {
+                b64_encode(rq, strlen(rq), e1, sizeof e1); b64_encode(cx, strlen(cx), e2, sizeof e2);
+                ksnprintf(ln, sizeof ln, "aih %d %s %s", id, e1, e2);
+                reply("EVT", NULL, ln);
+            }
+        }
         int c = com2_getc();
         if (c < 0) { thread_sleep_ms((u64)t_poll->val); continue; }
         if (c == '\r') continue;
@@ -64,7 +73,11 @@ static void agentd(void *arg)
                 reply("ERR", NULL, "401 authentication failed");
             }
         }
-        else if (!strcmp(argv[0], "BYE")) { cur = NULL; reply("OK", NULL, "bye"); }
+        else if (!strcmp(argv[0], "SUB") && argc >= 2 && !strcmp(argv[1], "aih")) {
+            if (!cur || !(cur->caps & (1u << CAP_AIH))) { reply("ERR", NULL, "403 needs the aih capability"); continue; }
+            aih_planner_set(agent_index(cur)); reply("OK", NULL, "subscribed to aih requests");
+        }
+        else if (!strcmp(argv[0], "BYE")) { if (cur && aih_planner_idx() == agent_index(cur)) aih_planner_set(-1); cur = NULL; reply("OK", NULL, "bye"); }
         else if (!strcmp(argv[0], "CALL") && argc >= 3) {
             if (!cur || !cur->used) { reply("ERR", argv[1], "401 not authenticated"); continue; }
             int rc = agent_call(cur, argc - 2, argv + 2, &out, 0);

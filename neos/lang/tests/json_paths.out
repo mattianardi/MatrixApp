@@ -1,0 +1,7 @@
+[1, 2.5, "x", true, nil] d -3 5
+{"k":[1,"two",null,false],"s":"q\"uote"}
+[1,2,{"z":[]}]
+C:\Users\neos \\neos\root\usr\bin D:\ \\srv\share\x
+/mnt/c/Users/neos /mnt/d/ /etc /mnt/unc/srv/share/f rel/dir
+a/b/c file.txt /x/y f.exe
+true

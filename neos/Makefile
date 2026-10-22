@@ -49,12 +49,16 @@ $(BUILD)/linux/hello_rs: linuxtests/hello_rs.rs | $(BUILD)
 $(BUILD)/linux/hello_go: linuxtests/hello_go.go | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	CGO_ENABLED=0 go build -o $@ $<
+$(BUILD)/linux/nio: lang/nio.c | $(BUILD)
+	@mkdir -p $(BUILD)/linux
+	gcc -O2 -static -DNIO_NEOS -Wno-misleading-indentation -o $@ $< -lm
+NIO_TESTS := $(wildcard lang/tests/*.nio lang/tests/*.out)
 $(BUILD)/linux/busybox: | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	cp /usr/bin/busybox $@
 
-$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) $(addprefix $(BUILD)/linux/,$(LINUX_BINS)) $(BUILD)/linux/busybox tools/mkinitrd.py
-	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) $(foreach p,$(LINUX_BINS),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox etc/motd=README.md
+$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) $(addprefix $(BUILD)/linux/,$(LINUX_BINS)) $(BUILD)/linux/busybox $(BUILD)/linux/nio $(NIO_TESTS) tools/mkinitrd.py
+	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) $(foreach p,$(LINUX_BINS),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox bin/nio=$(BUILD)/linux/nio $(foreach f,$(NIO_TESTS),lib/nio/tests/$(notdir $(f))=$(f)) etc/motd=README.md
 
 $(BUILD)/%.o: kernel/%.asm | $(BUILD)
 	$(NASM) -f elf64 $< -o $@
@@ -83,6 +87,8 @@ test: all
 	@$(MAKE) --no-print-directory nettest
 	@$(MAKE) --no-print-directory usertest
 	@$(MAKE) --no-print-directory linuxtest
+	@$(MAKE) --no-print-directory niotest
+	@$(MAKE) --no-print-directory aihtest
 	@$(MAKE) --no-print-directory agenttest
 
 shelltest: all
@@ -97,10 +103,16 @@ linuxtest: all
 usertest: all
 	@tools/check-user.sh
 
+niotest: all
+	@tools/check-nio.sh
+
+aihtest: all
+	@python3 tools/check-aih.py | tail -1
+
 agenttest: all
 	@python3 tools/check-agent.py | tail -1
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test shelltest nettest usertest linuxtest agenttest clean
+.PHONY: all run test shelltest nettest usertest linuxtest niotest aihtest agenttest clean

@@ -1,6 +1,7 @@
 #include "shell.h"
 #include "net.h"
 #include "fs.h"
+#include "vfs.h"
 #include "varbus.h"
 
 static void err(const char *m) { kprintf("\x1b[91m%s\x1b[0m\n", m); }
@@ -120,7 +121,8 @@ int c_ls(int argc, char **argv, struct ctx *c)
         if (dup || tb_newrow(c->tb) < 0) continue;
         tb_set(c->tb, 0, "%s", name); tb_set(c->tb, 1, "%s", slash ? "dir" : "file"); tb_set(c->tb, 2, "%lu", slash ? 0ul : (u64)sz);
     }
-    if (!any && dl) { c->tb->ncols = 0; if (!c->pure) err("no such directory (the filesystem is in RAM and starts empty)"); return -1; }
+    struct inode *di = vfs_lookup(dir);
+    if (!any && dl && !(di && (di->mode & S_IFMT) == S_IFDIR)) { c->tb->ncols = 0; if (!c->pure) err("no such directory"); return -1; }
     return 0;
 }
 
@@ -211,6 +213,7 @@ int c_sha256(int argc, char **argv, struct ctx *c)
 #include "proc.h"
 #include "agent.h"
 #include "fdt.h"
+#include "aih.h"
 
 static int fg_pid;
 int tty_pump(void)
@@ -267,5 +270,149 @@ int c_pkill(int argc, char **argv, struct ctx *c)
     i64 pid;
     if (c->pure) return -1;
     if (argc < 2 || parse_i64(argv[1], &pid) || proc_kill((int)pid, 137)) { err("usage: pkill <pid>   (see `proc`)"); return -1; }
+    return 0;
+}
+
+int c_binfmt(int argc, char **argv, struct ctx *c)
+{
+    if (argc >= 3 && !c->pure) {
+        if (!strcmp(argv[1], "add") && argc >= 4) { if (binfmt_add(argv[2], argv[3], argc > 4 ? argv[4] : "")) { err("binfmt table full"); return -1; } return 0; }
+        if (!strcmp(argv[1], "remove")) { if (binfmt_remove(argv[2])) { err("no such extension"); return -1; } return 0; }
+    }
+    tb_init(c->tb, "extension", "interpreter", "arg", NULL);
+    char ext[12], interp[48], arg[24];
+    for (int i = 0; !binfmt_get(i, ext, interp, arg); i++) { if (tb_newrow(c->tb) < 0) break; tb_set(c->tb, 0, "%s", ext); tb_set(c->tb, 1, "%s", interp); tb_set(c->tb, 2, "%s", arg); }
+    return 0;
+}
+
+/* `lx <cmd>`: force the Linux program even when NEOS has a built-in of the same name */
+int c_lx(int argc, char **argv, struct ctx *c)
+{
+    if (argc < 2) { err("usage: lx <linux-command> [args]   (runs /bin/<command>)"); return -1; }
+    char path[128];
+    ksnprintf(path, sizeof path, "/bin/%s", argv[1]);
+    char *av[16]; int n = 0;
+    av[n++] = "run"; av[n++] = path;
+    for (int i = 2; i < argc && n < 15; i++) av[n++] = argv[i];
+    av[n] = NULL;
+    return c_run(n, av, c);
+}
+
+/* unknown command: is it a program? search $PATH (Linux form), then the cwd for scripts */
+int shell_try_external(int argc, char **argv, struct ctx *c)
+{
+    char found[128] = "", pathv[256] = "/bin:/usr/bin", cand[160];
+    bus_get("PATH", NEOS_VIEW_LINUX, pathv, sizeof pathv);
+    if (strchr(argv[0], '/') || strchr(argv[0], '\\')) { fs_norm(argv[0], cand, sizeof cand); struct inode *i = vfs_lookup(cand); if (i && (i->mode & S_IFMT) != S_IFDIR) strlcpy(found, cand, sizeof found); }
+    else {
+        for (char *d = pathv; *d;) {
+            char *e2 = strchr(d, ':'); size_t dl = e2 ? (size_t)(e2 - d) : strlen(d);
+            if (dl && dl < 100) { char dir[100]; memcpy(dir, d, dl); dir[dl] = 0; ksnprintf(cand, sizeof cand, "%s/%s", dir, argv[0]); struct inode *i = vfs_lookup(cand); if (i && (i->mode & S_IFMT) != S_IFDIR) { strlcpy(found, cand, sizeof found); break; } }
+            if (!e2) break; d = e2 + 1;
+        }
+        if (!found[0]) { fs_norm(argv[0], cand, sizeof cand); struct inode *i = vfs_lookup(cand); if (i && (i->mode & S_IFMT) == S_IFREG) strlcpy(found, cand, sizeof found); }
+    }
+    if (!found[0]) return -1;
+    char *av[16]; int n = 0;
+    av[n++] = "run"; av[n++] = found;
+    for (int i = 1; i < argc && n < 15; i++) av[n++] = argv[i];
+    av[n] = NULL;
+    c_run(n, av, c);
+    return 0;
+}
+
+/* ------------------------------------------------------------ aih */
+static int ask_line(const char *prompt, char *buf, size_t n)
+{
+    size_t l = 0;
+    kprintf("%s", prompt);
+    for (;;) {
+        int k = key_poll();
+        if (k < 0) { thread_sleep_ms(5); continue; }
+        if (k == '\n') { kputc('\n'); buf[l] = 0; return (int)l; }
+        if (k == 3) { kprintf("^C\n"); buf[0] = 0; return -1; }
+        if ((k == '\b' || k == 127) && l) { l--; kprintf("\b \b"); }
+        else if (k >= 32 && k < 127 && l + 1 < n) { buf[l++] = (char)k; kputc((char)k); }
+    }
+}
+
+static void aih_exec_step(const char *world, const char *cmd)
+{
+    struct ctx xc = { NULL, "", 0 };
+    if (!strcmp(world, "neos")) { shell_run_line(cmd); return; }
+    char *av[8]; int n = 0;
+    av[n++] = "run";
+    if (!strcmp(world, "linux")) { av[n++] = "/bin/busybox"; av[n++] = "sh"; av[n++] = "-c"; av[n++] = (char *)cmd; }
+    else if (!strcmp(world, "nio")) { av[n++] = "/bin/nio"; av[n++] = "-e"; av[n++] = (char *)cmd; }
+    else if (!strcmp(world, "windows")) {
+        if (!vfs_lookup("/bin/winrt")) { kprintf("\x1b[93m  (Windows programs need the PE layer /bin/winrt, which is not installed)\x1b[0m\n"); return; }
+        av[n++] = "-w"; av[n++] = "win"; av[n++] = "/bin/winrt"; av[n++] = (char *)cmd;
+    } else { kprintf("\x1b[91m  unknown world '%s'\x1b[0m\n", world); return; }
+    av[n] = NULL;
+    c_run(n, av, &xc);
+}
+
+static int c_aih_inner(int argc, char **argv, struct ctx *c);
+int c_aih(int argc, char **argv, struct ctx *c)
+{
+    if (c->pure) return -1;
+    int r = c_aih_inner(argc, argv, c);
+    c->tb->ncols = c->tb->nrows = c->tb->more = 0;                 /* steps ran nested shell lines that used the same result table */
+    return r;
+}
+
+static int c_aih_inner(int argc, char **argv, struct ctx *c)
+{
+    (void)argv;
+    if (argc < 2 || !c->raw[0]) {
+        kprintf("AIH - AI Help. Say what you want to do, in Italian or English:\n  aih mostra la memoria        aih install hello        aih imposta il quantum a 5\n"
+                "  aih dir                     (a Windows/Linux command is translated)    aih ottimizza il sistema\n");
+        return 0;
+    }
+    static char plan[AIH_PLAN_MAX], from[16];
+    int attached = aih_planner_active();
+    if (attached) kprintf("\x1b[90m(asking the attached AI planner, up to %d s...)\x1b[0m\n", (int)tune_find("aih.timeout_s")->val);
+    aih_request(c->raw, plan, sizeof plan, from, sizeof from);
+
+    char says[400] = ""; struct { char world[10], risk[8], cmd[200]; int ok; } st[12]; int ns = 0;
+    for (char *l = plan; *l;) {
+        char *e2 = strchr(l, '\n'); size_t ll = e2 ? (size_t)(e2 - l) : strlen(l);
+        char line[300]; if (ll >= sizeof line) ll = sizeof line - 1;
+        memcpy(line, l, ll); line[ll] = 0;
+        if (!strncmp(line, "SAY ", 4)) { if (says[0]) strlcat(says, " ", sizeof says); strlcat(says, line + 4, sizeof says); }
+        else if (!strncmp(line, "STEP ", 5) && ns < 12) {
+            char *w = line + 5, *r = strchr(w, ' '); if (!r) goto next; *r++ = 0;
+            char *cm = strchr(r, ' '); if (!cm) goto next; *cm++ = 0;
+            strlcpy(st[ns].world, w, sizeof st[ns].world); strlcpy(st[ns].risk, r, sizeof st[ns].risk); strlcpy(st[ns].cmd, cm, sizeof st[ns].cmd);
+            ns++;
+        }
+      next:
+        if (!e2) break;
+        l = e2 + 1;
+    }
+    kprintf("\x1b[1;96maih\x1b[0m \x1b[90m[planner: %s]\x1b[0m %s\n", from, says[0] ? says : "(no explanation)");
+    int all_low = 1;
+    for (int i = 0; i < ns; i++) {
+        int hi = !strcmp(st[i].risk, "high"), md = !strcmp(st[i].risk, "medium");
+        if (hi || md || strcmp(st[i].risk, "low")) all_low = 0;
+        kprintf("  %d. %s[%-6s]\x1b[0m %-8s %s\n", i + 1, hi ? "\x1b[91m" : md ? "\x1b[93m" : "\x1b[92m", st[i].risk, st[i].world, st[i].cmd);
+    }
+    struct agent *ag = agent_find("aih");
+    if (ag) audit_add(agent_index(ag), "aih.plan", c->raw, ns, 1);
+    if (!ns) return 0;
+    char ans[16];
+    if (!(all_low && aih_autorun_low())) {
+        char prompt[64]; ksnprintf(prompt, sizeof prompt, "Run %d step%s? [y/N] ", ns, ns == 1 ? "" : "s");
+        if (ask_line(prompt, ans, sizeof ans) < 0 || (ans[0] != 'y' && ans[0] != 'Y' && ans[0] != 's' && ans[0] != 'S')) { kprintf("cancelled, nothing was run.\n"); return 0; }
+    }
+    for (int i = 0; i < ns; i++) {
+        if (!strcmp(st[i].risk, "high")) {
+            char p2[64]; ksnprintf(p2, sizeof p2, "step %d is HIGH risk (%.40s): type YES to run it: ", i + 1, st[i].cmd);
+            if (ask_line(p2, ans, sizeof ans) < 0 || strcmp(ans, "YES")) { kprintf("step %d skipped.\n", i + 1); continue; }
+        }
+        kprintf("\x1b[90m> %s\x1b[0m\n", st[i].cmd);
+        aih_exec_step(st[i].world, st[i].cmd);
+    }
+    if (ag) audit_add(agent_index(ag), "aih.run", c->raw, 0, 1);
     return 0;
 }

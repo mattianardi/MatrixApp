@@ -1,0 +1,13 @@
+let r = try { 1 / 0 } catch e { "caught: {e}" }
+println(r)
+try { throw "custom" } catch e { println("got", e) }
+try { throw {code: 7, msg: "boom"} } catch e { println(e.code, e.msg) }
+try { undefined_name + 1 } catch e { println(e) }
+try { [1][5] } catch e { println(e) }
+try { "a" + nil + 1; 1 < "a" } catch e { println(e) }
+try { int("zz") } catch e { println(e) }
+try { fact(1) } catch e { println(e) }
+fn thrower() { throw "from function" }
+try { thrower() } catch e { println(e) }
+let ok = try { 5 } catch e { 0 }
+println("done")

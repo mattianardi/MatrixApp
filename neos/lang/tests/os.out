@@ -1,0 +1,7 @@
+3 ["one", "two", "three"] true false
+["a.txt", "b.txt"]
+["from-shell", "42"]
+0 1 direct args
+true
+hello-nio nil str 0
+0

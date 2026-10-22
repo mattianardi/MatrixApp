@@ -1,0 +1,13 @@
+[5, 3, 8, 1] 5 9 [5, 3, 8, 1]
+[1, 3, 5, 8] [8, 5, 3, 1] [1, 8, 3, 5] 5 1
+[0, 1, 2, 3] [2, 3, 4, 5] [10, 7, 4, 1] [0, 1, 2]
+[10, 6, 16, 2] [5, 8] 17 17 1 8 2
+true false true true
+x 7 true [1, 2] true false ["name", "n", "key two", "extra"] 4
+{name: "shorthand"} 1
+pq
+0a1b
+[[0, "x"], [1, "y"]] [[1, "a"], [2, "b"]]
+a-1-true ["a", "b", "", "c"] ["two", "words"] a--b--c
+hi abc true true 2 -1
+["a", "b", "c"] ["a", "b", "c"] 5

@@ -4,7 +4,9 @@
 #include "net.h"
 #include "agent.h"
 #include "proc.h"
+#include "aih.h"
 #include "fs.h"
+#include "vfs.h"
 
 static struct tunable *t_test;
 static u32 boot_mods[4][2];          /* copied before any allocation: QEMU puts the multiboot structures in memory we would reuse */
@@ -55,11 +57,29 @@ static void load_initrd(void)
     }
 }
 
+/* Linux userland: every BusyBox applet becomes a name in /bin, so `grep`, `awk`, `sed`... work from the NEOS shell */
+static void install_applets(void)
+{
+    static const char *const applets[] = { "ash", "sh", "awk", "basename", "cat", "chmod", "cp", "cut", "date", "df", "diff", "dirname", "du", "env", "expr", "false",
+        "find", "grep", "egrep", "head", "hexdump", "hostname", "id", "kill", "ln", "md5sum", "sha256sum", "mkdir", "mv", "od", "printf", "readlink", "rm", "rmdir", "sed", "seq",
+        "sleep", "sort", "stat", "tail", "tar", "tee", "test", "[", "touch", "tr", "true", "uname", "uniq", "wc", "which", "xargs", "yes", "less", "more", "vi", "gzip", "gunzip",
+        "echo", "pwd", "base64", "cmp", "comm", "cpio", "dd", "fold", "free", "ls", "nl", "paste", "realpath", "rev", "shuf", "split", "strings", "sync", "tac", "tree", "unzip", "uptime", "watch", "xxd" };
+    struct inode *bb = vfs_lookup("/bin/busybox");
+    if (!bb) return;
+    int n = 0;
+    for (unsigned i = 0; i < sizeof applets / sizeof *applets; i++) {
+        char p[64]; ksnprintf(p, sizeof p, "/bin/%s", applets[i]);
+        if (!vfs_lookup(p) && !vfs_symlink("busybox", p)) n++;
+    }
+    kprintf("[linux] %d BusyBox applets linked in /bin\n", n);
+}
+
 static void init_thread(void *arg)
 {
     (void)arg;
     providers_init();
     load_initrd();
+    install_applets();
     if (t_test->val) { int rc = selftest_run(); qemu_exit(rc ? 0x11 : 0x10); }
     agentd_start();
     shell_start();
@@ -105,6 +125,8 @@ void kmain(u32 magic, u64 mbi_phys)
     bus_init();
     agent_init();
     proc_init();
+    aih_init();
+    agent_add("aih", AK_NATIVE, NULL, NULL, 0, &(const char *){ "" });
     linux_init();
     ui_init();
     console_async_start();

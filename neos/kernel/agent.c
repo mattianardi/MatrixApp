@@ -7,7 +7,7 @@ static char *strstr_(const char *s) { for (; *s; s++) if (s[0] == '.' && s[1] ==
 static int atoi_(const char *s) { i64 v = 0; parse_i64(s, &v); return (int)v; }
 #define shell_tokenize_ shell_tokenize
 
-const char *const cap_names[NCAPS] = { "observe", "tune", "thread", "vars", "fs.read", "fs.write", "pkg", "net", "debug", "experiment", "admin" };
+const char *const cap_names[NCAPS] = { "observe", "tune", "thread", "vars", "fs.read", "fs.write", "pkg", "net", "debug", "experiment", "admin", "aih" };
 
 static struct agent agents[AG_MAX];
 struct tunable *t_gain;

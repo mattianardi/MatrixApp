@@ -1,0 +1,17 @@
+// arithmetic, strings, interpolation
+let a = 7
+let b = 2
+println(a + b, a - b, a * b, a / b, a % b, a ** b)
+println(10 / 5, 2 ** 10, -3 % 5, 7.5 + 0.5)
+let name = "NEOS"
+println("hello {name}, 2+3={2 + 3}, upper={upper(name)}")
+println("a" + "b" * 3, len("héllo"), "abc"[1], "abcdef"[1:4], "abcdef"[-2:])
+println(1 < 2 and 2 < 3, 1 > 2 or false, not true, nil == nil, 1 == 1.0, "x" in "xyz", 3 in [1, 2, 3])
+println(type(1), type(1.5), type("s"), type([]), type({}), type(nil), type(true), type(println))
+println(int("42") + 1, float("2.5") * 2, str(12) + "!", int(3.9))
+println("\{braces\}" == "\{" + "braces" + "\}", '{raw}')
+let i = 0
+while i < 3 { i += 1 }
+println("i =", i)
+println(if i == 3 { "three" } else { "other" })
+println(0x1F, 1_000)
