@@ -37,6 +37,7 @@ static long path_at(struct proc *p, long dirfd, u64 uptr, char *abs, size_t n)
     char raw[256];
     int l = strncpy_from_user(&p->as, raw, uptr, sizeof raw);
     if (l < 0) return -E_FAULT;
+    dirfd = (long)(int)dirfd;                                          /* the ABI passes a 32-bit int: -100 (AT_FDCWD) arrives zero-extended */
     if (raw[0] != '/' && dirfd != AT_FDCWD) {
         struct file *d = fdt_get(p->fds, (int)dirfd);
         if (!d) return -E_BADF;
@@ -616,6 +617,23 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 19: RET(sys_readv(p, (int)a0, a1, (long)a2, 0));
     case 20: RET(sys_readv(p, (int)a0, a1, (long)a2, 1));
     case 7:  RET(sys_poll(p, a0, a1, (int)a2));
+    case 40: {                                                            /* sendfile(out, in, *offset, count) */
+        struct file *o = fdt_get(p->fds, (int)a0), *in = fdt_get(p->fds, (int)a1);
+        if (!o || !in) RET(-E_BADF);
+        i64 save = in->off; int useoff = a2 != 0;
+        if (useoff) { u64 off; if (copy_from_user(&p->as, &off, a2, 8)) RET(-E_FAULT); in->off = (i64)off; }
+        u8 *kb = kmalloc(32768); if (!kb) RET(-E_NOMEM);
+        long total = 0;
+        while ((u64)total < a3) {
+            size_t c = a3 - (u64)total < 32768 ? (size_t)(a3 - (u64)total) : 32768;
+            long rd = file_read(in, kb, c); if (rd <= 0) { if (!total && rd < 0) total = rd; break; }
+            long wr = file_write(o, kb, (size_t)rd); if (wr < 0) { if (!total) total = wr; break; }
+            total += wr; if (wr < rd) break;
+        }
+        kfree(kb);
+        if (useoff && total > 0) { u64 no = (u64)in->off; copy_to_user(&p->as, a2, &no, 8); in->off = save; }
+        RET(total);
+    }
     case 41: RET(sys_socket(p, (int)a0, (int)a1, (int)a2));
     case 42: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 ip; u16 pt; if ((r = get_sockaddr(p, a1, a2, &ip, &pt))) RET(r); RET(sock_connect(sk, ip, pt)); }
     case 49: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 ip; u16 pt; if ((r = get_sockaddr(p, a1, a2, &ip, &pt))) RET(r); RET(sock_bind(sk, ip, pt)); }

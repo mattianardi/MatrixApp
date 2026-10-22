@@ -65,12 +65,16 @@ WIN_EXES := wintest winchild wincoop
 $(BUILD)/win/%.exe: winrt/tests/%.c | $(BUILD)
 	@mkdir -p $(BUILD)/win
 	x86_64-w64-mingw32-gcc -O2 -o $@ $<
+$(BUILD)/linux/neosctl: userland/neosctl.c | $(BUILD)
+	@mkdir -p $(BUILD)/linux
+	gcc -O2 -static -o $@ $<
+USERLAND := $(wildcard userland/lib/neos/pkg/*)
 $(BUILD)/linux/busybox: | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	cp /usr/bin/busybox $@
 
-$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) $(addprefix $(BUILD)/linux/,$(LINUX_BINS)) $(BUILD)/linux/busybox $(BUILD)/linux/nio $(BUILD)/linux/winrt $(addprefix $(BUILD)/win/,$(addsuffix .exe,$(WIN_EXES))) $(NIO_TESTS) $(wildcard webapps/*) tools/mkinitrd.py
-	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) $(foreach p,$(LINUX_BINS),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox bin/nio=$(BUILD)/linux/nio bin/winrt=$(BUILD)/linux/winrt $(foreach w,$(WIN_EXES),bin/$(w).exe=$(BUILD)/win/$(w).exe) $(foreach f,$(NIO_TESTS),lib/nio/tests/$(notdir $(f))=$(f)) $(foreach f,$(wildcard webapps/*),www/$(notdir $(f))=$(f)) etc/motd=README.md
+$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) $(addprefix $(BUILD)/linux/,$(LINUX_BINS)) $(BUILD)/linux/busybox $(BUILD)/linux/nio $(BUILD)/linux/winrt $(BUILD)/linux/neosctl $(USERLAND) $(addprefix $(BUILD)/win/,$(addsuffix .exe,$(WIN_EXES))) $(NIO_TESTS) $(wildcard webapps/*) tools/mkinitrd.py
+	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) $(foreach p,$(LINUX_BINS),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox bin/nio=$(BUILD)/linux/nio bin/winrt=$(BUILD)/linux/winrt bin/neosctl=$(BUILD)/linux/neosctl $(foreach f,$(USERLAND),lib/neos/pkg/$(notdir $(f))=$(f)) $(foreach w,$(WIN_EXES),bin/$(w).exe=$(BUILD)/win/$(w).exe) $(foreach f,$(NIO_TESTS),lib/nio/tests/$(notdir $(f))=$(f)) $(foreach f,$(wildcard webapps/*),www/$(notdir $(f))=$(f)) etc/motd=README.md
 
 $(BUILD)/%.o: kernel/%.asm | $(BUILD)
 	$(NASM) -f elf64 $< -o $@

@@ -30,7 +30,7 @@ int c_net(int argc, char **argv, struct ctx *c)
         if (!t || tb_newrow(c->tb) < 0) continue;
         tb_set(c->tb, 0, "%s", keys[i] + 4); tb_set(c->tb, 1, "%s", t->sval);
     }
-    u64 rx, tx, drop; e1000_stats(&rx, &tx, &drop);
+    u64 rx, tx, drop; nic_stats(&rx, &tx, &drop);
     tb_newrow(c->tb); tb_set(c->tb, 0, "rx_frames"); tb_set(c->tb, 1, "%lu", rx);
     tb_newrow(c->tb); tb_set(c->tb, 0, "tx_frames"); tb_set(c->tb, 1, "%lu", tx);
     tb_newrow(c->tb); tb_set(c->tb, 0, "tx_dropped"); tb_set(c->tb, 1, "%lu", drop);
@@ -182,17 +182,45 @@ int c_pwd(int argc, char **argv, struct ctx *c)
     return 0;
 }
 
+static int fg_pid;
+static int ctrl_c(void);
+#include "proc.h"
+/* Package backends live in /lib/neos/pkg/<name>.sh (shipped in the initrd): `pkg install pip:requests`, `deb:<file|url>`, `tar:<url>`, `apt:<name>`.
+ * They run as ordinary Linux programs; the registry (/var/pkg, /opt, PATH) stays the one place that says what is installed. */
+static int run_backend(const char *backend, const char *sub, const char *spec)
+{
+    char script[64]; ksnprintf(script, sizeof script, "/lib/neos/pkg/%s.sh", backend);
+    if (!vfs_lookup(script)) { kprintf("\x1b[91mpkg: no backend '%s'\x1b[0m\n", backend); return -1; }
+    char *av[5] = { "/bin/sh", script, (char *)sub, (char *)spec, NULL };
+    struct spawn_opts o = { 0 }; int pid; const char *e = "";
+    o.grant[0] = "pkg:*"; o.ngrant = 1;                                  /* the operator typed `pkg ...`: the backend may register what it installs */
+    if (proc_spawn("/bin/sh", spec ? 4 : 3, av, &o, &pid, &e)) { kprintf("\x1b[91mpkg: %s\x1b[0m\n", e); return -1; }
+    i64 code; fg_pid = pid;
+    int r = proc_wait(pid, &code, ctrl_c);
+    fg_pid = 0;
+    if (r == -2) { proc_kill(pid, 130); kprintf("^C\n"); return -1; }
+    return code == 0 ? 0 : -1;
+}
+
 int c_pkg(int argc, char **argv, struct ctx *c)
 {
     const char *sub = argc > 1 ? argv[1] : "list", *e = "";
     if (!strcmp(sub, "list")) { pkg_table(c->tb); return 0; }
+    if (!strcmp(sub, "installed")) { pkg_installed_table(c->tb); return 0; }
     if (c->pure) return -1;
     int r;
+    if ((!strcmp(sub, "install") || !strcmp(sub, "remove")) && argc > 2) {
+        const char *colon = strchr(argv[2], ':');
+        if (colon && colon > argv[2] && colon - argv[2] < 8 && colon[1] != '/') {               /* backend:spec */
+            char be[10]; size_t bl = (size_t)(colon - argv[2]); memcpy(be, argv[2], bl); be[bl] = 0;
+            return run_backend(be, sub, colon + 1);
+        }
+    }
     if (!strcmp(sub, "update")) r = pkg_update(&e);
     else if (!strcmp(sub, "info") && argc > 2) { if (pkg_info(argv[2])) { err("unknown package"); return -1; } return 0; }
     else if (!strcmp(sub, "install") && argc > 2) r = pkg_install(argv[2], &e);
     else if (!strcmp(sub, "remove") && argc > 2) r = pkg_remove(argv[2], &e);
-    else { err("usage: pkg [update | list | info <n> | install <n> | remove <n>]"); return -1; }
+    else { err("usage: pkg [update | list | installed | info <n> | install <n | pip:x | deb:file | tar:url | apt:n> | remove <n | pip:x ...>]"); return -1; }
     if (r) { kprintf("\x1b[91mpkg: %s\x1b[0m\n", e); return -1; }
     return 0;
 }

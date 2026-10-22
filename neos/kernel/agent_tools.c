@@ -512,6 +512,24 @@ static int c_pkginstfile(struct agent *a, int argc, char **argv, const char **wh
     return 0;
 }
 
+static int c_pkgrecord(struct agent *a, int argc, char **argv, const char **why)
+{
+    NEEDARGS(4, "pkg.record <name> <version> <origin>");
+    if (!scope_allows(a, CAP_PKG, argv[1], 0, 0)) { *why = "package name outside this agent's pkg scope"; return 403; }
+    return 0;
+}
+static int t_pkgrecord(struct agent *a, int argc, char **argv, struct jbuf *o)
+{
+    (void)argc;
+    char rec[96]; const u8 *x; size_t xn;
+    ksnprintf(rec, sizeof rec, "/var/pkg/%s", argv[1]);
+    int had = fs_read(rec, &x, &xn) == 0;
+    if (pkg_record(argv[1], argv[2], argv[3])) return fail(o, 507, "filesystem full");
+    if (!had) journal_push(a, J_PKG, 0, argv[1], NULL, NULL, 0, 0);
+    jp(o, "{\"recorded\":\"%s\",\"version\":\"%s\",\"origin\":\"%s\"}", argv[1], argv[2], argv[3]);
+    return 0;
+}
+
 /* ------------------------------------------------------------ network */
 static int c_netget(struct agent *a, int argc, char **argv, const char **why)
 {
@@ -707,6 +725,7 @@ const struct tool agent_tools[] = {
     { "pkg.install",     "name:str",                          "download, verify and install a package",                   CAP_PKG,     RISK_REV,  c_pkgname, t_pkginstall },
     { "pkg.remove",      "name:str",                          "remove an installed package",                              CAP_PKG,     RISK_IRREV, c_pkgname, t_pkgremove },
     { "pkg.build",       "name:str,version:str,dir:str",      "pack a directory of the filesystem into an NPK package",   CAP_PKG,     RISK_REV,  c_pkgbuild, t_pkgbuild },
+    { "pkg.record",      "name:str,version:str,origin:str",   "register software installed by another tool (pip, deb, tar) in the package registry", CAP_PKG, RISK_REV, c_pkgrecord, t_pkgrecord },
     { "pkg.install_file","name:str,version:str,path:str",     "install a locally built NPK package",                     CAP_PKG,     RISK_REV,  c_pkginstfile, t_pkginstfile },
     { "net.get",         "url:str,dest:str",                  "HTTP GET into a file (host must be in your net scope)",   CAP_NET,     RISK_REV,  c_netget, t_netget },
     { "debug.peek",      "addr:int,len:int",                  "read up to 128 bytes of kernel memory (read-only)",       CAP_DEBUG,   RISK_READ, c_peek, t_peek },

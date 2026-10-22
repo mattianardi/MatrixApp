@@ -12,6 +12,7 @@ struct icmp { u8 type, code; u16 csum, id, seq; } __attribute__((packed));
 
 static u32 my_ip, my_mask, my_gw, my_dns;
 static int nic_ok;
+static struct tunable *t_nic;
 static struct tunable *t_ip, *t_gw, *t_dns, *t_mask, *t_mac, *t_dhcp, *t_poll, *t_prio, *t_arp_ms, *t_dns_ms;
 static const u8 bcast[6] = { 255, 255, 255, 255, 255, 255 };
 
@@ -91,16 +92,16 @@ static int eth_send(const u8 *dst, u16 type, const u8 *payload, int len)
     u8 frame[1536];
     struct eth *e = (struct eth *)frame;
     if (len > 1500) return -1;
-    memcpy(e->dst, dst, 6); memcpy(e->src, e1000_mac(), 6); e->type = be16(type);
+    memcpy(e->dst, dst, 6); memcpy(e->src, nic_mac(), 6); e->type = be16(type);
     memcpy(frame + sizeof *e, payload, len);
     if (len + (int)sizeof *e < 60) memset(frame + sizeof *e + len, 0, 60 - sizeof *e - len);
-    return e1000_send(frame, (int)sizeof *e + len);
+    return nic_send(frame, (int)sizeof *e + len);
 }
 
 static void arp_request(u32 ip)
 {
     struct arp a = { be16(1), be16(0x0800), 6, 4, be16(1), {0}, be32(my_ip), {0}, be32(ip) };
-    memcpy(a.sha, e1000_mac(), 6);
+    memcpy(a.sha, nic_mac(), 6);
     eth_send(bcast, 0x0806, (u8 *)&a, sizeof a);
 }
 
@@ -212,7 +213,7 @@ static void rx_arp(const u8 *p, int len)
     }
     if (be16(a->op) == 1 && my_ip && tpa == my_ip) {
         struct arp r = { be16(1), be16(0x0800), 6, 4, be16(2), {0}, be32(my_ip), {0}, a->spa };
-        memcpy(r.sha, e1000_mac(), 6); memcpy(r.tha, a->sha, 6);
+        memcpy(r.sha, nic_mac(), 6); memcpy(r.tha, a->sha, 6);
         eth_send(a->sha, 0x0806, (u8 *)&r, sizeof r);
     }
 }
@@ -281,7 +282,7 @@ static void net_thread(void *arg)
 {
     (void)arg;
     for (;;) {
-        e1000_poll(rx_frame);
+        nic_poll(rx_frame);
         lo_drain();
         tcp_tick();
         thread_sleep_ms((u64)t_poll->val);
@@ -316,7 +317,7 @@ static void dhcp_send(int type)
     p[0] = 1; p[1] = 1; p[2] = 6;
     p[4] = (u8)(dhcp_xid >> 24); p[5] = (u8)(dhcp_xid >> 16); p[6] = (u8)(dhcp_xid >> 8); p[7] = (u8)dhcp_xid;
     p[10] = 0x80;                                              /* ask for broadcast replies: we have no address yet */
-    memcpy(p + 28, e1000_mac(), 6);
+    memcpy(p + 28, nic_mac(), 6);
     p[236] = 99; p[237] = 130; p[238] = 83; p[239] = 99;
     int o = 240;
     p[o++] = 53; p[o++] = 1; p[o++] = (u8)type;
@@ -438,14 +439,14 @@ int net_resolve(const char *name, u32 *ip)
 
 void net_stats_text(char *b, size_t n)
 {
-    u64 r, t, d; e1000_stats(&r, &t, &d);
+    u64 r, t, d; nic_stats(&r, &t, &d);
     ksnprintf(b, n, "rx %lu frames, tx %lu frames, tx-ring-full %lu | arp %lu icmp %lu ip %lu udp %lu bad %lu",
               r, t, d, n_arp_rx, n_icmp_rx, n_ip_rx, n_udp_rx, n_bad);
 }
 
 void net_init(void)
 {
-    module_register("net", "0.1", "e1000 + ARP/IPv4/ICMP/UDP/TCP, DHCP, DNS client");
+    module_register("net", "0.1", "NIC drivers (virtio-net, e1000, RTL8139) + ARP/IPv4/ICMP/UDP/TCP, DHCP, DNS client");
     t_dhcp   = tune_bool("net", "dhcp",    "configure the interface with DHCP at boot", TF_BOOT, 1, NULL);
     t_poll   = tune_int ("net", "poll_ms", "receive polling interval (ms); lower = lower latency, more CPU", TF_LIVE, 1, 1, 100, NULL);
     t_prio   = tune_int ("net", "prio",    "priority of the network thread", TF_BOOT, 2, 0, 6, NULL);
@@ -456,12 +457,13 @@ void net_init(void)
     t_gw     = tune_str ("net", "gateway", "default gateway", TF_RO, "0.0.0.0", NULL);
     t_dns    = tune_str ("net", "dns",     "DNS server", TF_RO, "0.0.0.0", NULL);
     t_mac    = tune_str ("net", "mac",     "interface MAC", TF_RO, "-", NULL);
+    t_nic    = tune_str ("net", "nic",     "network driver in use", TF_RO, "none", NULL);
     pci_scan();
-    if (e1000_init() == 0) {
+    if (nic_probe() == 0) {
         nic_ok = 1;
-        const u8 *m = e1000_mac(); char b[24];
+        const u8 *m = nic_mac(); char b[24];
         ksnprintf(b, sizeof b, "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
-        set_str(t_mac, b);
+        set_str(t_mac, b); set_str(t_nic, nic_name());
     }
 }
 

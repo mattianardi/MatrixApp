@@ -3,8 +3,19 @@
 #include "varbus.h"
 
 /* In-memory filesystem with real inodes: directories, in-place read/write/truncate, devices, symlinks. */
-#define MAXI 1536
+#define MAXI 8192
 static struct inode nodes[MAXI];
+
+/* path -> inode index: open addressing (value = index + 1, -1 = deleted). Keeps lookups O(1) with thousands of files (Python's stdlib, wheels). */
+#define HSZ 32768
+static int htab[HSZ];
+static u32 hpath(const char *s) { u32 h = 2166136261u; for (; *s; s++) h = (h ^ (u8)*s) * 16777619u; return h; }
+static void h_insert(int idx) { u32 h = hpath(nodes[idx].path) & (HSZ - 1); while (htab[h] > 0) h = (h + 1) & (HSZ - 1); htab[h] = idx + 1; }
+static void h_remove(int idx)
+{
+    u32 h = hpath(nodes[idx].path) & (HSZ - 1);
+    for (int n = 0; n < HSZ && htab[h]; n++, h = (h + 1) & (HSZ - 1)) if (htab[h] == idx + 1) { htab[h] = -1; return; }
+}
 static u32 next_ino = 2;
 static size_t total;
 static u64 boot_epoch;          /* unix time at boot (CMOS RTC) */
@@ -69,7 +80,9 @@ void fs_norm(const char *in, char *out, size_t n)
 
 static struct inode *lookup_raw(const char *path)
 {
-    for (int i = 0; i < MAXI; i++) if (nodes[i].used && !strcmp(nodes[i].path, path)) return &nodes[i];
+    u32 h = hpath(path) & (HSZ - 1);
+    for (int n = 0; n < HSZ && htab[h]; n++, h = (h + 1) & (HSZ - 1))
+        if (htab[h] > 0 && !strcmp(nodes[htab[h] - 1].path, path)) return &nodes[htab[h] - 1];
     return NULL;
 }
 
@@ -98,6 +111,7 @@ static struct inode *alloc_node(const char *path, u32 mode)
         memset(n, 0, sizeof *n);
         n->used = 1; n->mode = mode; n->ino = next_ino++; n->mtime = vfs_now();
         strlcpy(n->path, path, sizeof n->path);
+        h_insert(i);
         return n;
     }
     return NULL;
@@ -105,7 +119,7 @@ static struct inode *alloc_node(const char *path, u32 mode)
 
 static int ensure_parents(const char *path)
 {
-    char p[128];
+    char p[256];
     strlcpy(p, path, sizeof p);
     for (char *s = p + 1; *s; s++) if (*s == '/') {
         *s = 0;
@@ -119,7 +133,7 @@ static int ensure_parents(const char *path)
 
 int vfs_create(const char *path, u32 mode, struct inode **out)
 {
-    if (strlen(path) >= 127) return -E_NAMETOOLONG;
+    if (strlen(path) >= 255) return -E_NAMETOOLONG;
     struct inode *i = lookup_raw(path);
     if (i) { if (out) *out = i; return -E_EXIST; }
     int r = ensure_parents(path);
@@ -155,6 +169,7 @@ static void drop(struct inode *n)
 {
     total -= n->size;
     if (n->data) kfree(n->data);
+    h_remove((int)(n - nodes));
     n->used = 0; n->data = NULL;
 }
 
@@ -190,8 +205,8 @@ int vfs_rename(const char *from, const char *to)
         struct inode *n = &nodes[i];
         if (!n->used) continue;
         if (n == a || (!strncmp(n->path, from, fl) && n->path[fl] == '/' && (a->mode & S_IFMT) == S_IFDIR)) {
-            char np[128]; ksnprintf(np, sizeof np, "%s%s", to, n->path + fl);
-            strlcpy(n->path, np, sizeof n->path);
+            char np[256]; ksnprintf(np, sizeof np, "%s%s", to, n->path + fl);
+            h_remove(i); strlcpy(n->path, np, sizeof n->path); h_insert(i);
         }
     }
     return 0;
@@ -226,7 +241,9 @@ static int reserve(struct inode *i, size_t need)
 {
     if (need <= i->cap) return 0;
     size_t nc = i->cap ? i->cap : 64;
-    while (nc < need) nc *= 2;
+    if (need >= (256u << 10) && !i->cap) nc = need;              /* first big write: exact size (the heap serves big blocks by pages) */
+    else while (nc < need) nc *= 2;
+    if (nc >= (256u << 10) && i->cap) { size_t g = i->cap + i->cap / 2; if (g >= need) nc = g; }   /* big files grow by 1.5x */
     u8 *nd = kmalloc(nc);
     if (!nd) return -E_NOMEM;
     if (i->size) memcpy(nd, i->data, i->size);
@@ -238,7 +255,7 @@ static int reserve(struct inode *i, size_t need)
 long inode_write(struct inode *i, u64 off, const void *buf, size_t n)
 {
     if (i->dev == DEV_NULL || i->dev == DEV_ZERO || i->dev == DEV_RANDOM) return (long)n;
-    if (off + n < off || off + n > (64ull << 20)) return -E_INVAL;
+    if (off + n < off || off + n > (256ull << 20)) return -E_INVAL;
     int r = reserve(i, off + n);
     if (r) return r;
     if (off > i->size) memset(i->data + i->size, 0, off - i->size);
@@ -250,7 +267,7 @@ long inode_write(struct inode *i, u64 off, const void *buf, size_t n)
 
 int inode_truncate(struct inode *i, u64 len)
 {
-    if (len > (64ull << 20)) return -E_INVAL;
+    if (len > (256ull << 20)) return -E_INVAL;
     if (len > i->size) {
         int r = reserve(i, len);
         if (r) return r;

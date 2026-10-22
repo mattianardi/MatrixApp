@@ -38,7 +38,7 @@ enum { DEV_NONE, DEV_NULL, DEV_ZERO, DEV_RANDOM, DEV_TTY };
 
 struct inode {
     int used;
-    char path[128];
+    char path[256];
     u32 mode, ino;
     u8 *data;
     size_t size, cap;

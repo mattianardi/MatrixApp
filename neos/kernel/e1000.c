@@ -29,10 +29,13 @@ static u16 eeprom(int word)
     return 0;
 }
 
-int e1000_init(void)
+static int e1000_init(void)
 {
     struct pci_dev d;
-    if (pci_find(0x8086, 0x100E, &d) && pci_find(0x8086, 0x100F, &d) && pci_find(0x8086, 0x10D3, &d)) return -1;
+    static const u16 ids[] = { 0x100E, 0x100F, 0x1004, 0x1019, 0x101E, 0x10D3, 0x153A, 0x1502, 0x1503 };   /* 82540/82545/82543/82547, 82574L (e1000e), I217/I218 */
+    int found = 0;
+    for (unsigned i = 0; i < sizeof ids / sizeof *ids && !found; i++) found = pci_find(0x8086, ids[i], &d) == 0;
+    if (!found) return -1;
     u32 cmd = pci_read(d.bus, d.dev, d.fn, 4);
     pci_write(d.bus, d.dev, d.fn, 4, cmd | 0x7);                 /* I/O, memory, bus master */
     u32 bar = pci_read(d.bus, d.dev, d.fn, 0x10) & ~0xFu;
@@ -67,9 +70,9 @@ int e1000_init(void)
     return 0;
 }
 
-const u8 *e1000_mac(void) { return mac; }
+static const u8 *e1000_mac(void) { return mac; }
 
-int e1000_send(const u8 *frame, int len)
+static int e1000_send(const u8 *frame, int len)
 {
     if (!mmio || len > BUFSZ - 4) return -1;
     if (len < 60) len = 60;                                      /* minimum Ethernet frame (padding is whatever is in the buffer) */
@@ -87,7 +90,7 @@ int e1000_send(const u8 *frame, int len)
     return 0;
 }
 
-void e1000_poll(void (*cb)(const u8 *, int))
+static void e1000_poll(void (*cb)(const u8 *, int))
 {
     if (!mmio) return;
     while (rx[rx_cur].status & 1) {
@@ -101,4 +104,6 @@ void e1000_poll(void (*cb)(const u8 *, int))
     }
 }
 
-void e1000_stats(u64 *r, u64 *t, u64 *d) { *r = n_rx; *t = n_tx; *d = n_drop; }
+static void e1000_stats(u64 *r, u64 *t, u64 *d) { *r = n_rx; *t = n_tx; *d = n_drop; }
+
+const struct nic_driver nic_drv_e1000 = { "e1000", e1000_init, e1000_send, e1000_poll, e1000_mac, e1000_stats };

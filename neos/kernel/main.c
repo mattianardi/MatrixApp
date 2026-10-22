@@ -20,7 +20,7 @@ static void fmt_mem(char *b, size_t n)
               (u64)pmm_total_pages() / 256, (u64)pmm_free_pages() / 256, (u64)t >> 20);
 }
 static void fmt_sched(char *b, size_t n) { ksnprintf(b, n, "fixed-priority preemptive, %u Hz tick", timer_hz()); }
-static void fmt_net(char *b, size_t n)   { if (!net_nic_present()) { strlcpy(b, "no supported NIC found", n); return; } struct tunable *m = tune_find("net.mac"); ksnprintf(b, n, "e1000 %s (DHCP at boot: %s)", m->sval, net_wants_dhcp() ? "on" : "off"); }
+static void fmt_net(char *b, size_t n)   { if (!net_nic_present()) { strlcpy(b, "no supported NIC found", n); return; } struct tunable *m = tune_find("net.mac"); ksnprintf(b, n, "%s %s (DHCP at boot: %s)", nic_name(), m->sval, net_wants_dhcp() ? "on" : "off"); }
 static void fmt_sec(char *b, size_t n)   { ksnprintf(b, n, "ring 3 processes, NX, SMEP %s, SMAP %s, kernel in the higher half", vm_smep() ? "on" : "off", vm_smap() ? "on" : "off"); }
 static void fmt_mods(char *b, size_t n)  { ksnprintf(b, n, "%d modules, %d tunable settings", module_count(), tune_count()); }
 static void fmt_build(char *b, size_t n) { ksnprintf(b, n, "x86_64, built %s", __DATE__); }
@@ -41,7 +41,7 @@ static void providers_init(void)
     /* defaults both worlds expect */
     const char *e;
     bus_set("HOME", "/mnt/c/Users/neos", NEOS_VIEW_LINUX, 1, &e);
-    bus_set("PATH", "/usr/bin:/bin:/mnt/c/Windows/System32", NEOS_VIEW_LINUX, 1, &e);
+    bus_set("PATH", "/opt/bin:/usr/bin:/bin:/mnt/c/Windows/System32", NEOS_VIEW_LINUX, 1, &e);
     bus_set("USER", "neos", NEOS_VIEW_LINUX, 1, &e);
     bus_set("HOSTNAME", "neos", NEOS_VIEW_LINUX, 1, &e);
     bus_set("PWD", "/", NEOS_VIEW_LINUX, 1, &e);
@@ -51,9 +51,17 @@ static void load_initrd(void)
 {
     for (int i = 0; i < boot_nmods; i++) {
         const char *e = "";
-        int n = pkg_extract_root(P2V(boot_mods[i][0]), boot_mods[i][1] - boot_mods[i][0], &e);
-        if (n < 0) kprintf("[initrd] module %d rejected: %s\n", i, e);
-        else kprintf("[initrd] %d files unpacked (%u KiB)\n", n, (boot_mods[i][1] - boot_mods[i][0]) >> 10);
+        u64 start = boot_mods[i][0], end = boot_mods[i][1];
+        u32 kib = (u32)((end - start) >> 10);
+        if (i == 0) {                                                  /* module 0 is the initrd: unpacked into the filesystem root */
+            int n = pkg_extract_root(P2V(start), end - start, &e);
+            if (n < 0) { kprintf("[initrd] module %d rejected: %s\n", i, e); continue; }
+            kprintf("[initrd] %d files unpacked (%u KiB)\n", n, kib);
+        } else {                                                        /* further modules are packages for the offline cache */
+            if (pkg_stage_cache(P2V(start), end - start, &e)) { kprintf("[cache] module %d rejected: %s\n", i, e); continue; }
+            kprintf("[cache] package staged (%u KiB): `pkg install` works offline\n", kib);
+        }
+        pmm_free(start & ~0xFFFull, ((end + 0xFFF) & ~0xFFFull) / 4096 - (start & ~0xFFFull) / 4096);     /* the copy in the filesystem is enough: give the boot memory back */
     }
 }
 
@@ -71,6 +79,9 @@ static void install_applets(void)
         char p[64]; ksnprintf(p, sizeof p, "/bin/%s", applets[i]);
         if (!vfs_lookup(p) && !vfs_symlink("busybox", p)) n++;
     }
+    vfs_mkdir("/usr/bin", 0755);                                           /* #!/usr/bin/env python3 and friends */
+    if (!vfs_lookup("/usr/bin/env")) vfs_symlink("/bin/busybox", "/usr/bin/env");
+    vfs_mkdir("/opt/bin", 0755); vfs_mkdir("/var/cache/pkg", 0755); vfs_mkdir("/var/pkg", 0755);
     kprintf("[linux] %d BusyBox applets linked in /bin\n", n);
 }
 

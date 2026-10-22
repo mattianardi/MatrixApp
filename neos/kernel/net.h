@@ -15,12 +15,21 @@ int  pci_get(int i, struct pci_dev *out);
 int  pci_find(u16 vendor, u16 device, struct pci_dev *out);
 void pci_scan(void);
 
-/* e1000.c */
-int  e1000_init(void);
-int  e1000_send(const u8 *frame, int len);
-void e1000_poll(void (*cb)(const u8 *frame, int len));
-const u8 *e1000_mac(void);
-void e1000_stats(u64 *rx, u64 *tx, u64 *rxdrop);
+/* nic.c: drivers (virtio-net, e1000/e1000e, RTL8139) behind one interface */
+struct nic_driver {
+    const char *name;
+    int  (*init)(void);                                  /* 0 = device found and running */
+    int  (*send)(const u8 *frame, int len);
+    void (*poll)(void (*cb)(const u8 *frame, int len));
+    const u8 *(*mac)(void);
+    void (*stats)(u64 *rx, u64 *tx, u64 *drop);
+};
+int  nic_probe(void);
+const char *nic_name(void);
+int  nic_send(const u8 *frame, int len);
+void nic_poll(void (*cb)(const u8 *frame, int len));
+const u8 *nic_mac(void);
+void nic_stats(u64 *rx, u64 *tx, u64 *rxdrop);
 
 /* net.c */
 void net_init(void);
