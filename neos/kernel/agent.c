@@ -65,10 +65,12 @@ struct agent *agent_add(const char *name, int kind, const char *secret, char *to
     if (!name[0] || strlen(name) >= sizeof agents[0].name) { *err = "bad agent name (max 15 chars)"; return NULL; }
     if (agent_find(name)) { *err = "agent already exists"; return NULL; }
     struct agent *a = NULL;
+    u64 fl = irq_save();
     for (int i = 0; i < AG_MAX; i++) if (!agents[i].used) { a = &agents[i]; break; }
+    if (a) { memset(a, 0, sizeof *a); a->used = 1; }
+    irq_restore(fl);
     if (!a) { *err = "agent table full"; return NULL; }
-    memset(a, 0, sizeof *a);
-    a->used = 1; a->kind = (u8)kind; a->state = AS_ACTIVE;
+    a->kind = (u8)kind; a->state = AS_ACTIVE;
     strlcpy(a->name, name, sizeof a->name);
     a->policy[RISK_READ] = POL_ALLOW; a->policy[RISK_REV] = POL_ALLOW; a->policy[RISK_IRREV] = POL_ASK;
     a->tokens_ms = 60 * 1000;

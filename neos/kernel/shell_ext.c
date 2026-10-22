@@ -210,8 +210,16 @@ int c_sha256(int argc, char **argv, struct ctx *c)
 /* ---- processes ---- */
 #include "proc.h"
 #include "agent.h"
+#include "fdt.h"
 
-static int ctrl_c(void) { return key_poll() == 3; }
+static int fg_pid;
+int tty_pump(void)
+{
+    int k, got = 0;
+    while ((k = key_poll()) >= 0) { got = 1; if (k == 3 && fg_pid) { proc_kill(fg_pid, 130); kprintf("^C\n"); } else if (k == 20) sched_dump(); else tty_feed(k); }
+    return got;
+}
+static int ctrl_c(void) { tty_pump(); return 0; }
 
 int c_run(int argc, char **argv, struct ctx *c)
 {
@@ -230,7 +238,9 @@ int c_run(int argc, char **argv, struct ctx *c)
     if (proc_spawn(argv[i], argc - i, argv + i, &o, &pid, &e)) { kprintf("\x1b[91mrun: %s\x1b[0m\n", e); return -1; }
     if (bg) { kprintf("[pid %d] started in background\n", pid); return 0; }
     i64 code;
+    fg_pid = pid;
     int r = proc_wait(pid, &code, ctrl_c);
+    fg_pid = 0;
     if (r == -2) { proc_kill(pid, 130); kprintf("^C\n[pid %d] interrupted\n", pid); return -1; }
     kprintf("[pid %d] exited with code %ld\n", pid, code);
     return code == 0 ? 0 : -1;
@@ -239,7 +249,7 @@ int c_run(int argc, char **argv, struct ctx *c)
 int c_proc(int argc, char **argv, struct ctx *c)
 {
     (void)argc; (void)argv;
-    static const char *st[] = { "-", "running", "zombie", "exited" };
+    static const char *st[] = { "-", "starting", "running", "zombie", "exited" };
     tb_init(c->tb, "pid", "name", "state", "pages", "syscalls", "age_ms", "exit", NULL);
     for (int s = 0; s < MAX_PROCS; s++) {
         struct proc *p = proc_get(s);

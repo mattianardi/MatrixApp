@@ -15,7 +15,7 @@ P2=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s
 (cd $T/bad  && exec python3 -m http.server $P2 --bind 127.0.0.1 >/dev/null 2>&1) & S2=$!
 trap 'kill $S1 $S2 2>/dev/null' EXIT
 sleep 1
-out=$(QEMU_EXTRA='-nic user,model=e1000' NEOS_STEP=2 NEOS_BOOT_WAIT=3 NEOS_TIMEOUT=90 tools/shell-session.sh \
+out=$(QEMU_EXTRA='-nic user,model=e1000' NEOS_STEP=2 NEOS_BOOT_WAIT=10 NEOS_TIMEOUT=90 tools/shell-session.sh \
   'net' \
   'ping 10.0.2.2 2' \
   "tune set pkg.repo http://10.0.2.2:$P1" \

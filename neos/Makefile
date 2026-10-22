@@ -12,12 +12,14 @@ OBJS := $(BUILD)/boot.o $(BUILD)/isr.o $(patsubst kernel/%.c,$(BUILD)/%.o,$(CSRC
 AGENT_CHAN ?= -serial unix:$(BUILD)/agent.sock,server,nowait
 NIC ?= -nic user,model=e1000
 KARGS ?=
-QEMU = qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -initrd $(BUILD)/initrd.npk -m 128 -display none -append "$(KARGS)" \
+QEMU = qemu-system-x86_64 -kernel $(BUILD)/matrix32.elf -initrd $(BUILD)/initrd.npk -m 512 -display none -append "$(KARGS)" \
         -cpu max -serial stdio $(AGENT_CHAN) -no-reboot $(NIC) -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 USER_CFLAGS := -O2 -Wall -ffreestanding -fno-stack-protector -nostdlib -static -mno-avx -fno-asynchronous-unwind-tables \
                -Wl,--build-id=none -Wl,-z,max-page-size=4096
 USER_PROGS  := hello hello-pie crash spin
+LINUX_BINS  := hello_glibc fileio forkpipe threads hello_musl hello_rs hello_go
+LINUX_CC    := gcc -O2 -static -fno-pie -no-pie
 
 all: $(BUILD)/matrix32.elf $(BUILD)/initrd.npk
 
@@ -35,8 +37,24 @@ $(BUILD)/user/spin: user/spin.c user/neos.h kernel/neos_api.h | $(BUILD)
 	@mkdir -p $(BUILD)/user
 	$(CC) $(USER_CFLAGS) -Wl,-Ttext-segment=0x400000 -o $@ $<
 
-$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) tools/mkinitrd.py
-	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) etc/motd=README.md
+$(BUILD)/linux/%: linuxtests/%.c | $(BUILD)
+	@mkdir -p $(BUILD)/linux
+	$(LINUX_CC) -o $@ $<
+$(BUILD)/linux/hello_musl: linuxtests/hello_musl.c | $(BUILD)
+	@mkdir -p $(BUILD)/linux
+	musl-gcc -O2 -static -o $@ $<
+$(BUILD)/linux/hello_rs: linuxtests/hello_rs.rs | $(BUILD)
+	@mkdir -p $(BUILD)/linux
+	rustc -O --target x86_64-unknown-linux-musl -C target-feature=+crt-static $< -o $@
+$(BUILD)/linux/hello_go: linuxtests/hello_go.go | $(BUILD)
+	@mkdir -p $(BUILD)/linux
+	CGO_ENABLED=0 go build -o $@ $<
+$(BUILD)/linux/busybox: | $(BUILD)
+	@mkdir -p $(BUILD)/linux
+	cp /usr/bin/busybox $@
+
+$(BUILD)/initrd.npk: $(addprefix $(BUILD)/user/,$(USER_PROGS)) $(addprefix $(BUILD)/linux/,$(LINUX_BINS)) $(BUILD)/linux/busybox tools/mkinitrd.py
+	python3 tools/mkinitrd.py $@ $(foreach p,$(USER_PROGS),bin/$(p)=$(BUILD)/user/$(p)) $(foreach p,$(LINUX_BINS),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox etc/motd=README.md
 
 $(BUILD)/%.o: kernel/%.asm | $(BUILD)
 	$(NASM) -f elf64 $< -o $@
@@ -64,6 +82,7 @@ test: all
 	@$(MAKE) --no-print-directory shelltest
 	@$(MAKE) --no-print-directory nettest
 	@$(MAKE) --no-print-directory usertest
+	@$(MAKE) --no-print-directory linuxtest
 	@$(MAKE) --no-print-directory agenttest
 
 shelltest: all
@@ -71,6 +90,9 @@ shelltest: all
 
 nettest: all
 	@tools/check-net.sh
+
+linuxtest: all
+	@tools/check-linux.sh
 
 usertest: all
 	@tools/check-user.sh
@@ -81,4 +103,4 @@ agenttest: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run test shelltest nettest usertest agenttest clean
+.PHONY: all run test shelltest nettest usertest linuxtest agenttest clean

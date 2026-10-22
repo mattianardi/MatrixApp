@@ -8,7 +8,13 @@
 #define VMF_W 1
 #define VMF_X 2
 
-struct aspace { u64 pml4; size_t pages, limit; };
+#define PROT_READ 1
+#define PROT_WRITE 2
+#define PROT_EXEC 4
+#define MAX_VMAS 256
+struct inode;
+struct vma { u64 start, end; u8 prot; struct inode *ino; u64 off; };      /* ino != NULL: private file mapping */
+struct aspace { u64 pml4; size_t pages, limit; int nvma; struct vma vma[MAX_VMAS]; };
 
 void vm_init(void);
 void vm_tunables(void);                          /* drops the boot identity map, enables SMEP/SMAP when present */
@@ -22,11 +28,21 @@ int  user_range_ok(const struct aspace *as, u64 va, size_t len, int write);
 int  copy_from_user(const struct aspace *as, void *dst, u64 usrc, size_t n);
 int  copy_to_user(const struct aspace *as, u64 udst, const void *src, size_t n);
 int  strncpy_from_user(const struct aspace *as, char *dst, u64 usrc, size_t max);   /* length, or -1 */
+int  vma_add(struct aspace *as, u64 start, u64 end, int prot, struct inode *ino, u64 off);
+struct vma *vma_find(struct aspace *as, u64 addr);
+int  vm_fault(struct aspace *as, u64 addr, int write, int exec);    /* demand-page one page; 0 = handled */
+int  vm_munmap(struct aspace *as, u64 start, u64 len);
+int  vm_mprotect(struct aspace *as, u64 start, u64 len, int prot);   /* 0 / -1 (hole in the range) */
+int  vm_clone(struct aspace *dst, const struct aspace *src);         /* eager copy (fork) */
+u64  vm_find_gap(struct aspace *as, u64 hint, u64 len);
+int  vm_read32_nofault(const struct aspace *as, u64 va, u32 *out);
 int  vm_smep(void);
 int  vm_smap(void);
 
 /* gdt.c */
 void gdt_init(void);
+void syscall_init(void);
+void linux_init(void);
 void tss_set_rsp0(u64 rsp0);
 #define SEL_KCODE 0x08
 #define SEL_KDATA 0x10

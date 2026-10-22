@@ -9,7 +9,7 @@ root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sock = os.path.join(root, "build", "agent-test.sock")
 if os.path.exists(sock):
     os.unlink(sock)
-q = subprocess.Popen(["qemu-system-x86_64", "-kernel", os.path.join(root, "build/matrix32.elf"), "-initrd", os.path.join(root, "build/initrd.npk"), "-m", "128", "-display", "none",
+q = subprocess.Popen(["qemu-system-x86_64", "-kernel", os.path.join(root, "build/matrix32.elf"), "-initrd", os.path.join(root, "build/initrd.npk"), "-m", "512", "-display", "none",
                       "-cpu", "max", "-serial", "stdio", "-serial", f"unix:{sock},server,nowait", "-no-reboot", "-nic", "none"],
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 console = bytearray()

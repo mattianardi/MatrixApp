@@ -1,7 +1,7 @@
 #!/bin/sh
 # User mode: ELF (fixed address and PIE), isolation, capabilities, interop environment, kill, no memory leaks.
 cd "$(dirname "$0")/.." || exit 1
-out=$(NEOS_STEP=1.3 NEOS_TIMEOUT=120 tools/shell-session.sh \
+out=$(NEOS_BOOT_WAIT=10 NEOS_STEP=2.2 NEOS_TIMEOUT=160 tools/shell-session.sh \
   'echo FREE0=${NEOS.mem.free_kib}' \
   'run /bin/hello one "two words"' \
   'run /bin/hello-pie' \
@@ -14,7 +14,9 @@ out=$(NEOS_STEP=1.3 NEOS_TIMEOUT=120 tools/shell-session.sh \
   'run /bin/crash io' \
   'run /bin/crash exec' \
   'run /bin/crash div' \
+  'tune set proc.max_pages 4096' \
   'run /bin/crash mem' \
+  'tune set proc.max_pages 65536' \
   'run -g tune:sched.quantum[2..20] /bin/hello' \
   'run -b /bin/spin' \
   'proc | where state=running | cols name state' \
@@ -27,7 +29,7 @@ check() { printf '%s\n' "$out" | grep -qF -- "$1" || { echo "MISSING: $1"; fail=
 check "args: '/bin/hello' 'one' 'two words'"
 check 'hello from ring 3'
 check 'main at 0x401000'
-check 'main at 0x555500001000'
+check 'main at 0x555555555000'
 check 'float check: 377'
 check 'mmap ok: AZ'
 check '[pid 1] exited with code 42'

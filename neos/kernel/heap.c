@@ -16,7 +16,7 @@ static struct tunable *t_mb;
 void heap_init(void)
 {
     module_register("heap", "1.0", "O(1) size-class kernel allocator");
-    t_mb = tune_int("heap", "size_mb", "kernel heap size (MiB)", TF_BOOT, 8, 1, 256, NULL);
+    t_mb = tune_int("heap", "size_mb", "kernel heap size (MiB)", TF_BOOT, 64, 1, 256, NULL);
     size_t pages = (size_t)t_mb->val * 256;
     u64 a = pmm_alloc(pages);
     if (!a) panic("cannot allocate %lu MiB kernel heap", (u64)t_mb->val);

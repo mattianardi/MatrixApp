@@ -1,6 +1,9 @@
 #include "fs.h"
 #include "net.h"
 #include "shell.h"
+#include "vfs.h"
+
+static const char *strstr(const char *h, const char *n) { for (; *h; h++) { size_t i = 0; while (n[i] && h[i] == n[i]) i++; if (!n[i]) return h; } return 0; }
 
 /*
  * Package manager. Repository layout (see tools/mkrepo.py):
@@ -133,6 +136,7 @@ static int npk_walk(const char *root, const u8 *d, size_t n, int write, const ch
         if (write) {
             char path[128]; ksnprintf(path, sizeof path, "%s/%s", root, rel);
             if (fs_write(path, d + i, (size_t)sz)) { *err = "filesystem full"; return -1; }
+            if (strstr(path, "/bin/") || !strncmp(path, "/bin/", 5)) { struct inode *ni = vfs_lookup(path); if (ni) ni->mode |= 0111; }
         }
         i += (size_t)sz + 1;
         files++;

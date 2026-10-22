@@ -47,6 +47,7 @@ struct frame *isr_dispatch(struct frame *f)
     if (f->vec < 32) {
         if (f->cs & 3) return proc_fault(f);                   /* a user program misbehaved: kill it, not the kernel */
         u64 cr2; __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        { u64 *sp = (u64 *)f->rsp; if (f->rsp > PHYSMAP) kprintf("[fault] rsp=%p stack: %lx %lx %lx %lx %lx (thread %d)\n", f->rsp, sp[0], sp[1], sp[2], sp[3], sp[4], thread_current_id()); }
         panic("exception %lu err=%lx rip=%p cr2=%p", f->vec, f->err, f->rip, cr2);
     }
     if (f->vec < 48) {
@@ -61,6 +62,12 @@ struct frame *isr_dispatch(struct frame *f)
         }
         if (irq_fn[irq]) irq_fn[irq]();
         return f;
+    }
+    if (f->vec == 0x100) {                                       /* SYSCALL instruction: Linux ABI */
+        __asm__ volatile("sti");
+        struct frame *r = linux_syscall(f);
+        __asm__ volatile("cli");
+        return r;
     }
     if (f->vec == NEOS_YIELD_VECTOR) return sched_on_yield(f);
     if (f->vec == NEOS_SYSCALL_VECTOR) {

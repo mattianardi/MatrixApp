@@ -4,7 +4,20 @@ struct tss { u32 res0; u64 rsp0, rsp1, rsp2, res1, ist[7], res2; u16 res3, iomap
 static u64 gdt[7] __attribute__((aligned(16)));
 static struct tss tss;
 
-void tss_set_rsp0(u64 rsp0) { tss.rsp0 = rsp0; }
+u64 syscall_kstack;
+void tss_set_rsp0(u64 rsp0) { tss.rsp0 = rsp0; syscall_kstack = rsp0; }
+
+extern void syscall_entry(void);
+static void wrmsr_(u32 msr, u64 v) { __asm__ volatile("wrmsr" :: "c"(msr), "a"((u32)v), "d"((u32)(v >> 32))); }
+static u64 rdmsr_(u32 msr) { u32 lo, hi; __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr)); return ((u64)hi << 32) | lo; }
+
+void syscall_init(void)
+{
+    wrmsr_(0xC0000080, rdmsr_(0xC0000080) | 1);                /* EFER.SCE */
+    wrmsr_(0xC0000081, (0x10ull << 48) | (0x08ull << 32));      /* STAR */
+    wrmsr_(0xC0000082, (u64)syscall_entry);                      /* LSTAR */
+    wrmsr_(0xC0000084, 0x47700);                                 /* SFMASK: clear IF DF TF AC NT IOPL */
+}
 
 void gdt_init(void)
 {

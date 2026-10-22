@@ -1,6 +1,8 @@
 bits 64
 extern isr_dispatch
 global isr_common
+global syscall_entry
+extern syscall_kstack
 global isr_table
 
 section .text
@@ -16,6 +18,19 @@ isr_ %+ i:
     jmp isr_common
 %assign i i+1
 %endrep
+
+; SYSCALL entry (IF masked by SFMASK): build the same frame an interrupt would, then share the common path.
+syscall_entry:
+    mov [rel user_rsp_tmp], rsp
+    mov rsp, [rel syscall_kstack]
+    push qword 0x1B             ; ss
+    push qword [rel user_rsp_tmp]
+    push r11                    ; rflags
+    push qword 0x23             ; cs
+    push rcx                    ; rip
+    push qword 0                ; err
+    push qword 0x100            ; vec: Linux syscall
+    jmp isr_common
 
 isr_common:
     push rax
@@ -63,3 +78,6 @@ isr_table:
     dq isr_ %+ i
 %assign i i+1
 %endrep
+
+section .bss
+user_rsp_tmp: resq 1

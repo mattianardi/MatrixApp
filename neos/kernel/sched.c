@@ -21,13 +21,15 @@ struct thread {
     u64 stack; u32 stack_pages;
     u64 cr3, ktop;                 /* address space and kernel-stack top (TSS.rsp0) */
     void *proc;
+    void *wait_key;
+    struct uctx uc;
     struct frame *saved;
     u8 fx[512] __attribute__((aligned(16)));          /* FXSAVE area (user threads only) */
 };
 
 static struct thread threads[SCHED_MAX_THREADS];
 static int current;
-static u64 seq, total_run, cur_cr3;
+static u64 seq, total_run, cur_cr3, cur_fsbase;
 static u8 fx_init[512] __attribute__((aligned(16)));
 #define FXSAVE(p)  __asm__ volatile("fxsave (%0)" :: "r"(p) : "memory")
 #define FXRSTOR(p) __asm__ volatile("fxrstor (%0)" :: "r"(p) : "memory")
@@ -58,7 +60,7 @@ void sched_init(void)
     FXSAVE(fx_init);                                       /* clean FPU/SSE state handed to every new user thread */
 }
 
-static int create(const char *name, u8 prio, thread_fn fn, void *arg, void *proc, u64 cr3, u64 urip, u64 ursp)
+static int create(const char *name, u8 prio, thread_fn fn, void *arg, void *proc, u64 cr3, u64 urip, u64 ursp, const struct frame *init, const struct uctx *uc)
 {
     u64 fl = irq_save();
     int slot = -1;
@@ -76,6 +78,7 @@ static int create(const char *name, u8 prio, thread_fn fn, void *arg, void *proc
         f = (struct frame *)(top - sizeof *f);
         memset(f, 0, sizeof *f);
         f->rip = urip; f->cs = SEL_UCODE; f->ss = SEL_UDATA; f->rflags = 0x202; f->rsp = ursp;
+        if (init) *f = *init;                                   /* complete register state is in place before the thread can run */
     } else {
         *(u64 *)(top - 8) = (u64)thread_exit;               /* return address of fn */
         f = (struct frame *)(top - 8 - sizeof *f);
@@ -86,19 +89,20 @@ static int create(const char *name, u8 prio, thread_fn fn, void *arg, void *proc
     }
     *t = (struct thread){ .name = name, .state = READY, .prio = prio, .stamp = ++seq, .ready_tsc = rdtsc(),
                           .stack = stack, .stack_pages = pages, .cr3 = cr3, .ktop = top, .proc = proc, .saved = f };
-    if (proc) memcpy(t->fx, fx_init, sizeof t->fx);
+    if (proc) { if (init) FXSAVE(t->fx); else memcpy(t->fx, fx_init, sizeof t->fx); }       /* a forked child inherits the parent's FPU/SSE registers */
+    if (uc) t->uc = *uc;                                       /* TLS base and thread id are in place before it can run */
     irq_restore(fl);
     return slot;
 }
 
 int thread_create(const char *name, u8 prio, thread_fn fn, void *arg)
 {
-    return create(name, prio, fn, arg, NULL, vm_kernel_pml4(), 0, 0);
+    return create(name, prio, fn, arg, NULL, vm_kernel_pml4(), 0, 0, NULL, NULL);
 }
 
-int thread_create_user(const char *name, u8 prio, void *proc, u64 cr3, u64 rip, u64 usp)
+int thread_create_user(const char *name, u8 prio, void *proc, u64 cr3, u64 rip, u64 usp, const struct uctx *uc)
 {
-    return create(name, prio, NULL, NULL, proc, cr3, rip, usp);
+    return create(name, prio, NULL, NULL, proc, cr3, rip, usp, NULL, uc);
 }
 
 void *sched_current_proc(void) { return threads[current].proc; }
@@ -157,7 +161,7 @@ static struct frame *switch_to_best(struct frame *cur, int yielded)
     int best = 255;
     for (int i = 0; i < SCHED_MAX_THREADS; i++) {
         struct thread *x = &threads[i];
-        if (x->state == SLEEPING && x->wake <= ticks) { x->state = READY; x->ready_tsc = now; }
+        if (x->state == SLEEPING && x->wake <= ticks) { x->state = READY; x->ready_tsc = now; x->wait_key = NULL; }
         if ((x->state == READY || x->state == RUNNING) && x->prio < best) best = x->prio;
     }
 
@@ -190,7 +194,10 @@ static struct frame *switch_to_best(struct frame *cur, int yielded)
     }
     if (next != current) {
         if (t->proc) FXSAVE(t->fx);
-        if (threads[next].proc) FXRSTOR(threads[next].fx);
+        if (threads[next].proc) {
+            FXRSTOR(threads[next].fx);
+            if (threads[next].uc.fsbase != cur_fsbase) { cur_fsbase = threads[next].uc.fsbase; __asm__ volatile("wrmsr" :: "c"(0xC0000100), "a"((u32)cur_fsbase), "d"((u32)(cur_fsbase >> 32))); }
+        }
     }
     current = next;
     if (threads[next].cr3 != cur_cr3) { cur_cr3 = threads[next].cr3; vm_switch(cur_cr3); }
@@ -245,4 +252,92 @@ void sched_latency_reset(void)
     rt_lat_max = rt_lat_sum = rt_lat_n = 0;
     for (int i = 0; i < SCHED_MAX_THREADS; i++) threads[i].lat_max = 0;
     irq_restore(fl);
+}
+
+struct uctx *uctx_current(void) { return &threads[current].uc; }
+struct uctx *uctx_of(int id) { return id > 0 && id < SCHED_MAX_THREADS ? &threads[id].uc : NULL; }
+int thread_current_id(void) { return current; }
+
+void sleep_on_locked(void *key, u64 timeout_tick)
+{
+    threads[current].wait_key = key;
+    threads[current].wake = timeout_tick;
+    threads[current].state = SLEEPING;
+    thread_yield();
+}
+
+int wake_on(void *key, int max)
+{
+    int n = 0;
+    u64 fl = irq_save();
+    u64 now = rdtsc();
+    for (int i = 0; i < SCHED_MAX_THREADS && n < max; i++)
+        if (threads[i].state == SLEEPING && threads[i].wait_key == key) { threads[i].state = READY; threads[i].wait_key = NULL; threads[i].ready_tsc = now; n++; }
+    irq_restore(fl);
+    return n;
+}
+
+int thread_create_user_frame(const char *name, u8 prio, void *proc, u64 cr3, const struct frame *init, const struct uctx *uc)
+{
+    return create(name, prio, NULL, NULL, proc, cr3, init->rip, init->rsp, init, uc);
+}
+
+void sched_set_fsbase(u64 v)
+{
+    threads[current].uc.fsbase = v;
+    cur_fsbase = v;
+    __asm__ volatile("wrmsr" :: "c"(0xC0000100), "a"((u32)v), "d"((u32)(v >> 32)));
+}
+
+void sched_switch_cr3(u64 cr3)                        /* the running thread gets a new address space (execve) */
+{
+    u64 fl = irq_save();
+    threads[current].cr3 = cr3; cur_cr3 = cr3; vm_switch(cr3);
+    irq_restore(fl);
+}
+
+void sched_kill_threads_of(void *proc)
+{
+    u64 fl = irq_save();
+    for (int i = 1; i < SCHED_MAX_THREADS; i++) if (threads[i].proc == proc && threads[i].state != UNUSED) threads[i].state = DEAD;
+    irq_restore(fl);
+}
+
+int sched_threads_alive(void *proc)
+{
+    int n = 0;
+    for (int i = 1; i < SCHED_MAX_THREADS; i++) if (threads[i].proc == proc && threads[i].state != UNUSED && threads[i].state != DEAD) n++;
+    return n;
+}
+
+int thread_prio_of(int id) { return id >= 0 && id < SCHED_MAX_THREADS ? threads[id].prio : 4; }
+
+void sched_kill_threads_of_except(void *proc, int keep)
+{
+    u64 fl = irq_save();
+    for (int i = 1; i < SCHED_MAX_THREADS; i++) if (i != keep && threads[i].proc == proc && threads[i].state != UNUSED) threads[i].state = DEAD;
+    irq_restore(fl);
+}
+
+int requeue_on(void *from, void *to, int max)
+{
+    int n = 0;
+    u64 fl = irq_save();
+    for (int i = 0; i < SCHED_MAX_THREADS && n < max; i++)
+        if (threads[i].state == SLEEPING && threads[i].wait_key == from) { threads[i].wait_key = to; n++; }
+    irq_restore(fl);
+    return n;
+}
+
+void sched_dump(void)
+{
+    kprintf("\n\x1b[1;93m-- threads --\x1b[0m\n");
+    for (int i = 0; i < SCHED_MAX_THREADS; i++) {
+        struct thread *t = &threads[i];
+        if (t->state == UNUSED) continue;
+        kprintf(" %2d %-9s prio=%d %-6s", i, t->name, t->prio, state_name[t->state]);
+        if (t->state == SLEEPING) kprintf(" wake=%s key=%p", t->wake == ~0ull ? "never" : "timer", t->wait_key);
+        if (t->proc) kprintf(" last_syscall=%d utid=%d", t->uc.last_sys, t->uc.utid);
+        kprintf("\n");
+    }
 }

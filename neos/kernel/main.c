@@ -7,7 +7,8 @@
 #include "fs.h"
 
 static struct tunable *t_test;
-static const void *initrd_pending;
+static u32 boot_mods[4][2];          /* copied before any allocation: QEMU puts the multiboot structures in memory we would reuse */
+static int boot_nmods;
 
 static void fmt_cpu(char *b, size_t n)  { ksnprintf(b, n, "%s%s", cpu_brand(), cpu_invariant_tsc() ? "  (invariant TSC)" : ""); }
 static void fmt_mem(char *b, size_t n)
@@ -46,14 +47,11 @@ static void providers_init(void)
 
 static void load_initrd(void)
 {
-    const u32 *info = initrd_pending;
-    if (!(info[0] & (1 << 3))) return;
-    const u32 *mods = P2V(info[6]);
-    for (u32 i = 0; i < info[5]; i++) {
+    for (int i = 0; i < boot_nmods; i++) {
         const char *e = "";
-        int n = pkg_extract_root(P2V(mods[i * 4]), mods[i * 4 + 1] - mods[i * 4], &e);
-        if (n < 0) kprintf("[initrd] module %u rejected: %s\n", i, e);
-        else kprintf("[initrd] %d files unpacked\n", n);
+        int n = pkg_extract_root(P2V(boot_mods[i][0]), boot_mods[i][1] - boot_mods[i][0], &e);
+        if (n < 0) kprintf("[initrd] module %d rejected: %s\n", i, e);
+        else kprintf("[initrd] %d files unpacked (%u KiB)\n", n, (boot_mods[i][1] - boot_mods[i][0]) >> 10);
     }
 }
 
@@ -80,8 +78,13 @@ void kmain(u32 magic, u64 mbi_phys)
     if (magic != 0x2BADB002) panic("bad multiboot magic %x", magic);
     vm_init();                            /* drop the boot identity map: the lower half is for user processes */
     gdt_init();
+    syscall_init();
 
     const u32 *mb = mbi;
+    if (mb[0] & (1 << 3)) {
+        const u32 *mods = P2V(mb[6]);
+        for (u32 i = 0; i < mb[5] && i < 4; i++) { boot_mods[boot_nmods][0] = mods[i * 4]; boot_mods[boot_nmods][1] = mods[i * 4 + 1]; boot_nmods++; }
+    }
     if (mb[0] & (1 << 2)) tune_bootargs((const char *)P2V(mb[4]));      /* kernel command line */
     module_register("kernel", NEOS_VERSION, "boot, interrupts, API");
     t_test = tune_bool("boot", "test", "run the RT self-test and exit QEMU (CI)", TF_BOOT, 0, NULL);
@@ -89,7 +92,6 @@ void kmain(u32 magic, u64 mbi_phys)
     vm_tunables();
     pmm_init(mbi);
     heap_init();
-    initrd_pending = mbi;
     idt_init();
     pic_init();
     timer_init();
@@ -103,6 +105,7 @@ void kmain(u32 magic, u64 mbi_phys)
     bus_init();
     agent_init();
     proc_init();
+    linux_init();
     ui_init();
     console_async_start();
     bus_start();

@@ -163,7 +163,7 @@ typedef void (*thread_fn)(void *);
 struct thread_info { int id; const char *name; const char *state; int prio; u64 runticks; int stack_kib; u64 lat_max_ns; };
 void sched_init(void);
 int  thread_create(const char *name, u8 prio, thread_fn fn, void *arg);
-int  thread_create_user(const char *name, u8 prio, void *proc, u64 cr3, u64 rip, u64 usp);
+/* defined after struct uctx */
 void *sched_current_proc(void);
 void thread_mark_dead(int id);
 int  thread_is_dead(int id);
@@ -182,6 +182,27 @@ u64  sched_runticks_total(void);
 int  thread_protected(int id);                       /* core system threads agents may never touch */
 void sched_latency(u64 *max_ns, u64 *avg_ns, u64 *n);   /* ready->running latency of real-time-class threads */
 void sched_latency_reset(void);
+
+/* per-thread user context (Linux ABI): TLS base, CLONE_CHILD_CLEARTID address, user-visible thread id */
+struct uctx { u64 fsbase, clear_tid; int utid; int last_sys; };
+struct uctx *uctx_current(void);
+struct uctx *uctx_of(int id);
+int  thread_current_id(void);
+/* wait queues by key. sleep_on_locked: caller holds irq_save and has just re-checked its condition,
+ * which makes check+sleep atomic against wake_on (single CPU). timeout_tick ~0 = forever. */
+void sleep_on_locked(void *key, u64 timeout_tick);
+int  wake_on(void *key, int max);
+int  thread_create_user(const char *name, u8 prio, void *proc, u64 cr3, u64 rip, u64 usp, const struct uctx *uc);
+int  thread_create_user_frame(const char *name, u8 prio, void *proc, u64 cr3, const struct frame *init, const struct uctx *uc);
+
+void sched_switch_cr3(u64 cr3);
+void sched_dump(void);               /* Ctrl-T: every thread, what it waits on, its last syscall */
+void sched_kill_threads_of(void *proc);
+void sched_kill_threads_of_except(void *proc, int keep);
+int  sched_threads_alive(void *proc);
+int  thread_prio_of(int id);
+u64  wall_ns(void);                  /* CLOCK_REALTIME */
+void fill_random(void *buf, size_t n);
 
 /* ---- selftest.c ---- */
 int  selftest_run(void);     /* 0 = pass; blocks the calling thread */

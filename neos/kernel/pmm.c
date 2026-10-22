@@ -61,7 +61,11 @@ u64 pmm_alloc(size_t pages)
 
 void pmm_free(u64 addr, size_t pages)
 {
-    for (size_t i = 0; i < pages; i++) mark(addr / PAGE + i, 0);
+    for (size_t i = 0; i < pages; i++) {
+        u64 pg = addr / PAGE + i;
+        if (!(bitmap[pg / 32] & (1u << (pg % 32)))) panic("pmm: double free of physical page %lx (caller %p)", pg * PAGE, __builtin_return_address(0));
+        mark(pg, 0);
+    }
 }
 
 size_t pmm_free_pages(void) { return free_count; }
