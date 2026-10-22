@@ -35,3 +35,6 @@ void ui_start(void);
 int  ui_pin(const char *title, const char *pipeline, const char **err);
 int  ui_unpin(int idx);
 int  ui_pins(int idx, char *title, size_t tn, char *pipe, size_t pn);
+
+/* command plumbing shared with extension modules (shell_ext.c) */
+struct ctx { struct table *tb; const char *raw; int pure; };

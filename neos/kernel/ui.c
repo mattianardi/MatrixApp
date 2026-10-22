@@ -12,7 +12,7 @@ static struct { int used; char title[24]; char pipe[96]; } pins[MAX_PINS];
 static struct table tb;                 /* only touched by the UI thread */
 static struct tunable *t_ms, *t_dock, *t_status, *t_rows;
 static int dock_h;
-static u64 last_busy, last_total, last_idle;
+static u64 last_total, last_idle;
 static int cpu_pct;
 
 void ui_init(void)

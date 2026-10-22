@@ -1,6 +1,8 @@
 #include "kernel.h"
 #include "shell.h"
 #include "varbus.h"
+#include "net.h"
+#include "fs.h"
 
 static struct tunable *t_test;
 
@@ -12,6 +14,7 @@ static void fmt_mem(char *b, size_t n)
               (u64)pmm_total_pages() / 256, (u64)pmm_free_pages() / 256, (u64)t >> 20);
 }
 static void fmt_sched(char *b, size_t n) { ksnprintf(b, n, "fixed-priority preemptive, %u Hz tick", timer_hz()); }
+static void fmt_net(char *b, size_t n)   { if (!net_nic_present()) { strlcpy(b, "no supported NIC found", n); return; } struct tunable *m = tune_find("net.mac"); ksnprintf(b, n, "e1000 %s (DHCP at boot: %s)", m->sval, net_wants_dhcp() ? "on" : "off"); }
 static void fmt_mods(char *b, size_t n)  { ksnprintf(b, n, "%d modules, %d tunable settings", module_count(), tune_count()); }
 static void fmt_build(char *b, size_t n) { ksnprintf(b, n, "x86_64, built %s", __DATE__); }
 
@@ -34,6 +37,7 @@ static void providers_init(void)
     bus_set("PATH", "/usr/bin:/bin:/mnt/c/Windows/System32", NEOS_VIEW_LINUX, 1, &e);
     bus_set("USER", "neos", NEOS_VIEW_LINUX, 1, &e);
     bus_set("HOSTNAME", "neos", NEOS_VIEW_LINUX, 1, &e);
+    bus_set("PWD", "/", NEOS_VIEW_LINUX, 1, &e);
 }
 
 static void init_thread(void *arg)
@@ -43,6 +47,11 @@ static void init_thread(void *arg)
     if (t_test->val) { int rc = selftest_run(); qemu_exit(rc ? 0x11 : 0x10); }
     shell_start();
     ui_start();
+    if (net_nic_present() && net_wants_dhcp()) {
+        net_start();
+        if (net_dhcp() == 0) { char b[24]; ip_format(net_ip(), b, sizeof b); kprintf("\n[net] DHCP: %s\n", b); }
+        else kprintf("\n[net] no DHCP answer; use `net set` or `net dhcp`\n");
+    } else if (net_nic_present()) net_start();
 }
 
 void kmain(u32 magic, const void *mbi)
@@ -64,6 +73,9 @@ void kmain(u32 magic, const void *mbi)
     sched_init();
     module_register("api", "1", "syscall int 0x80 + struct neos_api");
     input_init();
+    fs_init();
+    pkg_init();
+    net_init();
     bus_init();
     ui_init();
     console_async_start();
@@ -73,6 +85,7 @@ void kmain(u32 magic, const void *mbi)
     splash_info("CPU",       fmt_cpu);
     splash_info("Memory",    fmt_mem);
     splash_info("Scheduler", fmt_sched);
+    splash_info("Network",   fmt_net);
     splash_info("Modules",   fmt_mods);
     splash_show();
 

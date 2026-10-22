@@ -7,7 +7,6 @@
  * | cols | count | json`), or pinned to the live dock (`| pin`). Variables are
  * expanded in both conventions ($HOME, ${PATH@win}, %USERPROFILE%) in one line.
  */
-struct ctx { struct table *tb; const char *raw; int pure; };
 typedef int (*cmd_fn)(int argc, char **argv, struct ctx *c);
 struct cmd { const char *name, *usage, *help; cmd_fn fn; u8 pure; u8 complete; };   /* complete: 1 = tunables, 2 = vars */
 
@@ -15,7 +14,7 @@ struct cmd { const char *name, *usage, *help; cmd_fn fn; u8 pure; u8 complete; }
 static struct table out_tb;
 static char hist[16][LINE];
 static int nhist;
-static struct tunable *t_prio, *t_color_err;
+static struct tunable *t_prio;
 static const char PROMPT[] = "\x1b[1;36mneos\x1b[0m> ";
 
 static void err(const char *m) { kprintf("\x1b[91m%s\x1b[0m\n", m); }
@@ -47,7 +46,7 @@ static void expand_line(const char *in, char *out, size_t n)
     char seg[LINE], tmp[LINE * 2];
     size_t l = 0, sl = 0;
     #define FLUSH() do { seg[sl] = 0; bus_expand(seg, tmp, sizeof tmp); \
-        for (size_t i = 0; tmp[i] && l + 1 < n; i++) out[l++] = tmp[i]; sl = 0; } while (0)
+        for (size_t i_ = 0; tmp[i_] && l + 1 < n; i_++) { out[l++] = tmp[i_]; } sl = 0; } while (0)
     while (*in) {
         if (*in == '\'') {
             FLUSH();

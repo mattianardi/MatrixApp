@@ -1,42 +1,73 @@
-# MatrixOS
+# NEOS
 
-Kernel x86_64 da zero, pensato per applicazioni professionali: **deterministico**,
-**scalabile**, con l'obiettivo di eseguire binari Linux e Windows tramite livelli di compatibilità.
+**NEOS** — sistema operativo x86_64 scritto da zero, orientato a applicazioni **real-time** e professionali.
+Autore: **Mattia Nardi**.
 
-## Stato attuale (v0.1)
+Al boot mostra il logo NEOS con nome, autore e un riepilogo del sistema (CPU, memoria, scheduler, rete, moduli).
+Ogni modulo può aggiungere righe al riepilogo con `splash_info()`.
 
-| Componente | Stato |
+## Principi
+
+1. **Deterministico**: scheduler a priorità fisse con prelazione, scelta O(N) limitata, nessuna allocazione nel
+   percorso di dispatch, log asincrono (la stampa non blocca mai un thread RT), allocatore kernel O(1).
+2. **Tutto è regolabile**: ogni modulo registra le proprie impostazioni (`tune_int/bool/str`). Sono *live*
+   (effetto immediato) oppure *boot* (effetto al prossimo avvio, impostabili da riga di comando del kernel
+   `neos.<modulo>.<nome>=<valore>`). I programmi le raggiungono con la stessa API: syscall `int 0x80`
+   (`neos_api.h`) o la tabella `struct neos_api`.
+3. **Un solo ambiente**: nessun salto tra “GUI” e “terminale”. Una schermata unica con barra di stato viva,
+   viste live fissate (dock) e flusso dei comandi. I comandi restituiscono **tabelle**, non testo:
+   `ps | where prio<5 | sort ticks desc | cols name prio ticks | pin Thread` lascia la vista aggiornata sullo schermo.
+4. **Linux e Windows nello stesso posto**: un *bus di variabili* con un interprete in background mantiene un unico
+   valore canonico e lo mostra a ciascun mondo nella sua convenzione.
+
+## Interoperabilità Linux ⇄ Windows (bus di variabili)
+
+| Scrivo da… | Valore | Lo leggo da Linux | Lo leggo da Windows |
+|---|---|---|---|
+| Linux `export PATH=/usr/bin:/mnt/c/tools` | lista di percorsi | `/usr/bin:/mnt/c/tools` | `\\neos\root\usr\bin;C:\tools` |
+| Windows `set Path=C:\bin;D:\apps` | lista di percorsi | `/mnt/c/bin:/mnt/d/apps` | `C:\bin;D:\apps` |
+
+- Sintassi accettate in qualsiasi riga: `$VAR`, `${VAR}`, `${VAR:-default}`, `%VAR%`, e le viste esplicite
+  `${PATH@win}` / `%PATH@lin%`.
+- Nomi equivalenti: `HOME`↔`USERPROFILE`, `USER`↔`USERNAME`, `TMPDIR`↔`TEMP`/`TMP`, `PWD`↔`CD`, ecc.
+- Come ciascun mondo: `$VAR` non definita → stringa vuota; `%VAR%` non definita → resta letterale.
+- Namespace `NEOS.*`: ogni impostazione è anche una variabile (`${NEOS.sched.quantum}`, `NEOS.timer.hz=2000`).
+- `env lin|win` produce il blocco d’ambiente per un processo dell’uno o dell’altro mondo.
+
+## Rete e pacchetti
+
+Driver e1000, ARP/IPv4/ICMP/UDP/TCP, DHCP, DNS, client HTTP. Pacchetti NPK con indice e SHA-256:
+`pkg update | list | info | install | remove` (installa in `/opt/<nome>`). Repository: `tools/mkrepo.py`.
+
+**Sicurezza**: il trasporto è HTTP semplice finché non esiste TLS, quindi `pkg` lo rifiuta finché non si imposta
+`pkg.allow_insecure on`. Per un’integrità reale fissare l’indice con `pkg.index_sha256` (hash comunicato fuori banda).
+I pacchetti sono verificati per dimensione e SHA-256 e validati per intero prima di scrivere qualsiasi file.
+
+## Build e test
+
+Requisiti: `gcc`, `nasm`, `ld`, `objcopy`, `qemu-system-x86_64`, `python3`.
+
+```
+make run         # avvia in QEMU (seriale su stdio, rete e1000 user-mode)
+make test        # self-test RT + sessioni di shell scriptate (interop) + rete/pacchetti (anche manomissione)
+```
+
+## Stato e cosa manca (onestamente)
+
+Fatto e testato in QEMU: boot, logo, scheduler RT, timer/jitter, console asincrona, registro impostazioni, API
+syscall, shell unificata (VGA + seriale + tastiera PS/2), dock live, bus di variabili, rete, pacchetti, FS in RAM.
+
+Non ancora fatto:
+
+| Area | Stato |
 |---|---|
-| Boot multiboot → long mode, identity map 1 GiB | fatto |
-| Console seriale + VGA, `kprintf`, panic | fatto |
-| IDT, PIC, PIT a 1000 Hz, frame di contesto uniforme | fatto |
-| Allocatore di pagine fisiche (bitmap, da mmap del bootloader) | fatto |
-| Scheduler a priorità fisse, preemptive, round-robin per livello, selezione O(N) limitata, nessuna allocazione nel percorso di dispatch | fatto |
-| Self-test automatico in QEMU (`make test`) | fatto |
+| Modalità utente (ring 3), memoria virtuale per processo, `syscall/sysret` | da fare — prerequisito per eseguire programmi |
+| Loader ELF + ABI syscall Linux; loader PE + sottosistema Win32/NT | da fare — i *dati* (variabili, percorsi, ambiente) sono già pronti |
+| Storage persistente (ATA/NVMe/virtio-blk) e filesystem su disco | da fare — oggi FS in RAM; le impostazioni “boot” si passano da riga di comando |
+| TLS / firme digitali dei pacchetti | da fare — oggi solo HTTP + SHA-256 + pin dell’indice |
+| SMP/APIC, isolamento dei core, tickless, priority inheritance sui mutex | da fare |
+| Grafica framebuffer / interfaccia a finestre | da fare — oggi modo testo 80×25 |
+| USB, audio, GPU, driver di rete oltre e1000 | da fare |
 
-## Build / test
-
-Requisiti: `gcc`, `nasm`, `ld`, `objcopy`, `qemu-system-x86_64`.
-
-```
-make run    # avvia in QEMU (output su seriale)
-make test   # esegue il self-test; exit code 0 se SELFTEST PASS
-```
-
-Il self-test verifica: preemption per priorità, latenza di risveglio di un task periodico real-time
-pari a 0 tick con la CPU saturata da thread a priorità inferiore, starvation corretta del livello più basso,
-equità del round-robin dentro lo stesso livello.
-
-## Roadmap (ordine proposto)
-
-1. **Memoria virtuale**: page table per processo, user mode (ring 3), TSS, heap del kernel.
-2. **Syscall** (`syscall/sysret`) e processi; IPC a messaggi.
-3. **Determinismo**: timer a risoluzione TSC/APIC, scheduling tickless, priority inheritance/ceiling sui mutex, CPU pinning/isolamento core, limiti di tempo per task.
-4. **Scalabilità**: ACPI/APIC, SMP con run-queue per core, NUMA-awareness.
-5. **Storage e rete**: driver virtio-blk/virtio-net → NVMe/e1000, VFS, filesystem (ext2 in sola lettura → scrittura/journaling), stack TCP/IP.
-6. **Compatibilità Linux**: loader ELF statico, ABI delle syscall Linux (`read/write/mmap/futex/clone/...`), poi ELF dinamico e glibc/musl.
-7. **Compatibilità Windows**: loader PE, sottosistema NT/Win32 sopra lo strato Linux (strada Wine/Proton) — il pezzo più grande dell'intero progetto.
-8. Sicurezza e affidabilità: capability/permessi, ASLR/NX, log, watchdog.
-
-Le fasi 6 e 7 sono di gran lunga le più costose: la compatibilità reale con applicazioni esistenti
-richiede migliaia di syscall/API da replicare con la semantica esatta.
+Il non-determinismo noto: il kernel gira ora su QEMU/TCG, quindi le misure di jitter (`rt`) riflettono l’host;
+su hardware reale con TSC invariante le statistiche diventano significative.
