@@ -62,7 +62,14 @@ static uint8_t *read_all(const char *path, size_t *n)
 static int prot_of(DWORD ch) { int p = 0; if (ch & 0x40000000) p |= PROT_READ; if (ch & 0x80000000) p |= PROT_WRITE; if (ch & 0x20000000) p |= PROT_EXEC; return p ? p : PROT_READ; }
 
 /* an unresolved import becomes a thunk that reports itself when - and only if - the program actually calls it */
-static void unresolved(const char *what) { fprintf(stderr, "\nwinrt: unimplemented Windows API called: %s\n", what); fflush(stderr); _exit(127); }
+static WINAPI long long unresolved(const char *what)
+{
+    static int lenient = -1;                                     /* WINRT_LENIENT=1: log each missing API once and return 0 instead of ending the program */
+    if (lenient < 0) { const char *e = getenv("WINRT_LENIENT"); lenient = e && *e == '1'; }
+    fprintf(stderr, "\nwinrt: unimplemented Windows API called: %s\n", what); fflush(stderr);
+    if (!lenient) _exit(127);
+    return 0;
+}
 static void *make_stub(const char *dll, const char *name)
 {
     static uint8_t *page; static size_t used;
@@ -98,18 +105,54 @@ static Module *find_loaded(const char *dll)
     return NULL;
 }
 
+/* Windows file names are case-insensitive: find the real spelling of "name" inside "dir" */
+static int find_ci(const char *dir, const char *name, char *out, size_t n)
+{
+    DIR *d = opendir(dir); if (!d) return 0;
+    struct dirent *e; int ok = 0;
+    while ((e = readdir(d))) if (!strcasecmp(e->d_name, name)) { snprintf(out, n, "%s/%s", dir, e->d_name); ok = 1; break; }
+    closedir(d); return ok;
+}
+int pe_find_dll(const char *name, char *out, size_t n)
+{
+    char lin[400];
+    if (strchr(name, '\\') || strchr(name, '/') || strchr(name, ':')) {
+        path_win_to_lin(name, lin, sizeof lin);
+        char dir[400]; strlcpy(dir, lin, sizeof dir); char *sl = strrchr(dir, '/'); if (!sl) return 0; *sl = 0;
+        return access(lin, R_OK) == 0 ? (strlcpy(out, lin, n), 1) : find_ci(dir[0] ? dir : "/", sl + 1, out, n);
+    }
+    char dirs[16][300]; int nd = 0;
+    strlcpy(dirs[nd], g_exe_path_lin, sizeof dirs[0]); { char *sl = strrchr(dirs[nd], '/'); if (sl) *sl = 0; nd++; }
+    if (getcwd(dirs[nd], sizeof dirs[0])) nd++;
+    strlcpy(dirs[nd++], "/mnt/c/Windows/System32", sizeof dirs[0]);
+    strlcpy(dirs[nd++], "/mnt/c/Windows", sizeof dirs[0]);
+    const char *path = getenv("PATH");
+    if (path) {
+        char *cp = strdup(path), *save = NULL;
+        for (char *t = strtok_r(cp, ";:", &save); t && nd < 16; t = strtok_r(NULL, ";:", &save)) {
+            if (strlen(t) == 1 && isalpha((unsigned char)t[0])) {                    /* "C:\dir" split at the colon: rejoin with the next token */
+                char *rest = strtok_r(NULL, ";", &save); char w[300]; snprintf(w, sizeof w, "%s:%s", t, rest ? rest : ""); path_win_to_lin(w, dirs[nd++], sizeof dirs[0]);
+            } else if (t[0] == '/') strlcpy(dirs[nd++], t, sizeof dirs[0]);
+        }
+        free(cp);
+    }
+    for (int i = 0; i < nd; i++) {
+        snprintf(lin, sizeof lin, "%s/%s", dirs[i], name);
+        if (access(lin, R_OK) == 0) { strlcpy(out, lin, n); return 1; }
+        if (find_ci(dirs[i], name, out, n)) return 1;
+    }
+    return 0;
+}
+
 void *pe_resolve_import(const char *dll, const char *name, int ordinal)
 {
     (void)ordinal;
     Module *m = find_loaded(dll);
     if (m && name) { void *p = pe_export(m, name); if (p) return p; }
     if (name) { void *p = rt_resolve(dll, name); if (p) return p; }
-    if (!m && name) {                                                            /* a real DLL next to the program or in the Windows directory */
-        char w[300], l[300];
-        snprintf(w, sizeof w, "%s\\%s", g_exe_path_win, dll);
-        char dir[260]; strlcpy(dir, g_exe_path_lin, sizeof dir); char *sl = strrchr(dir, '/'); if (sl) *sl = 0;
-        snprintf(l, sizeof l, "%s/%s", dir, dll);
-        if (access(l, R_OK) == 0) { Module *d = pe_load(l, dll, 1); if (d) { void *p = pe_export(d, name); if (p) return p; } }
+    if (!m && name) {                                                            /* a real DLL: next to the program, in the Windows directories or on PATH */
+        char l[400];
+        if (pe_find_dll(dll, l, sizeof l)) { Module *d = pe_load(l, dll, 1); if (d) { void *p = pe_export(d, name); if (p) return p; } }
     }
     return make_stub(dll, name ? name : "(ordinal)");
 }

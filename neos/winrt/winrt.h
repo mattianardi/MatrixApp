@@ -67,6 +67,7 @@ void rt_die(const char *fmt, ...) __attribute__((noreturn));
 void *rt_resolve(const char *dll, const char *name);          /* built-in shim symbol or NULL */
 Module *pe_load(const char *path_lin, const char *name, int is_dll);
 void *pe_export(Module *m, const char *name);
+int  pe_find_dll(const char *name, char *out, size_t n);          /* DLL search: program dir, cwd, C:\\Windows\\System32, C:\\Windows, PATH (case-insensitive) */
 void *pe_resolve_import(const char *dll, const char *name, int ordinal);
 int  pe_call_entry(Module *m, int reason);
 

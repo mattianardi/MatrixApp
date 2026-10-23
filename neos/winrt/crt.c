@@ -305,6 +305,7 @@ static const Sym csyms[] = {
     { "_fmode", &fmode_v }, { "_commode", &commode_v }, { "__initenv", &initenv_v },
     { NULL, NULL }
 };
+void crt_list(void (*cb)(const char *)) { for (const Sym *s = csyms; s->name; s++) cb(s->name); }
 void *crt_resolve(const char *name)
 {
     for (const Sym *s = csyms; s->name; s++) if (!strcmp(s->name, name)) return s->fn;

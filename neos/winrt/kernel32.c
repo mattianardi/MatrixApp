@@ -585,7 +585,8 @@ WINAPI static HMODULE k_GetModuleHandleW(LPCWSTR n) { if (!n) return g_main_modu
 WINAPI static HMODULE k_LoadLibraryA(LPCSTR n)
 {
     HMODULE b = builtin_mod(n); if (b) return b;
-    LP(p, n); Module *m = pe_load(p, n, 1);
+    char p[400]; if (!pe_find_dll(n, p, sizeof p)) { set_last_error(126); return NULL; }
+    Module *m = pe_load(p, n, 1);
     if (!m) { set_last_error(126); return NULL; }
     pe_call_entry(m, 1);
     return m->base;
@@ -785,9 +786,17 @@ void k32_init(void)
     *(DWORD *)(peb + 0x118) = 10; *(DWORD *)(peb + 0x11c) = 0; *(WORD *)(peb + 0x120) = 19045;
     (void)dummy_key; (void)g_argi;
 }
+void k32_list(void (*cb)(const char *))
+{
+    for (const Sym *s = ksyms; s->name; s++) cb(s->name);
+    extern void crt_list(void (*)(const char *)); crt_list(cb);
+    extern void ext_list(void (*)(const char *)); ext_list(cb);
+}
 void *rt_resolve(const char *dll, const char *name)
 {
     (void)dll;
     for (const Sym *s = ksyms; s->name; s++) if (!strcmp(s->name, name)) return s->fn;
-    return crt_resolve(name);
+    void *p = crt_resolve(name);
+    if (p) return p;
+    extern void *ext_resolve(const char *); return ext_resolve(name);
 }

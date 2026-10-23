@@ -68,10 +68,10 @@ WINRT_SRC := $(wildcard winrt/*.c winrt/*.h)
 $(BUILD)/linux/winrt: $(WINRT_SRC) | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	gcc -O2 -static -Wno-attributes -o $@ winrt/*.c -lm -lpthread
-WIN_EXES := wintest winchild wincoop
+WIN_EXES := wintest winchild wincoop winext
 $(BUILD)/win/%.exe: winrt/tests/%.c | $(BUILD)
 	@mkdir -p $(BUILD)/win
-	x86_64-w64-mingw32-gcc -O2 -o $@ $<
+	x86_64-w64-mingw32-gcc -O2 -o $@ $< -lws2_32 -ladvapi32 -lwinmm -lole32 -luuid
 $(BUILD)/linux/neosctl: userland/neosctl.c | $(BUILD)
 	@mkdir -p $(BUILD)/linux
 	gcc -O2 -static -o $@ $<

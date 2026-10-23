@@ -2,10 +2,13 @@
 #include "winrt.h"
 
 void k32_init(void);
+void k32_list(void (*cb)(const char *));
+static void print_name(const char *n) { puts(n); }
 
 int main(int argc, char **argv)
 {
     g_argc = argc; g_argv = argv;
+    if (argc == 2 && !strcmp(argv[1], "--symbols")) { k32_list(print_name); return 0; }      /* every Win32 / CRT name the runtime provides (tools/compat-scan.py) */
     if (argc < 2) { fputs("usage: winrt program.exe [arguments]\n", stderr); return 2; }
     char *p = argv[1];
     char rp[4096];

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Unmodified Windows (PE64) programs on NEOS, and Windows <-> Linux cooperation through files, pipes and the variable bus.
 cd "$(dirname "$0")/.." || exit 1
-out=$(NEOS_BOOT_WAIT=10 NEOS_STEP=5 NEOS_TIMEOUT=200 tools/shell-session.sh \
+out=$(NEOS_BOOT_WAIT=10 NEOS_STEP=5 NEOS_TIMEOUT=260 tools/shell-session.sh \
+  'run /bin/winext.exe' \
   'run /bin/wintest.exe one "two words"' \
   'cat /mnt/c/shared/win.txt' \
   'cat /mnt/c/shared/crt.txt' \
@@ -12,6 +13,16 @@ out=$(NEOS_BOOT_WAIT=10 NEOS_STEP=5 NEOS_TIMEOUT=200 tools/shell-session.sh \
   "run /bin/busybox sh -c 'echo lin=\$NEOS_X'")
 fail=0
 check() { printf '%s\n' "$out" | grep -qF -- "$1" || { echo "MISSING: $1"; fail=1; }; }
+check 'EXT reg read=0 type=1 value=hello registry'
+check 'EXT reg dword=1234'
+check 'EXT reg deleted=yes'
+check 'EXT reg system=0 10.0'
+check "EXT sock connect=0 recv=13 'WINSOCK WORKS'"
+check 'EXT sock refused=-1 err=10061'
+check 'EXT condvar value=42'
+check 'EXT once runs=1'
+check 'EXT com create=REGDB_E_CLASSNOTREG'
+check 'EXT done'
 check 'WIN argc=3 argv0=\\neos\root\bin\wintest.exe'
 check 'WIN arg2=two words'
 check 'WIN fmt  3.14|42    |0000beef|str|z|1234567890123|99|wide'
