@@ -1,7 +1,7 @@
 #pragma once
 #include "vfs.h"
 
-enum { FT_NONE, FT_INODE, FT_PIPE_R, FT_PIPE_W, FT_TTY, FT_DIR, FT_SOCK, FT_EPOLL, FT_EVENTFD };
+enum { FT_NONE, FT_INODE, FT_PIPE_R, FT_PIPE_W, FT_TTY, FT_DIR, FT_SOCK, FT_EPOLL, FT_EVENTFD, FT_SERIAL, FT_CHR };
 #define O_ACCMODE 3
 #define O_WRONLY 1
 #define O_RDWR 2
@@ -24,6 +24,8 @@ struct file {
     struct sock *sock;
     struct epoll *ep;
     u64 evcount; u32 evgen;
+    int serial;                                               /* FT_SERIAL: port number */
+    int chr;                                                  /* FT_CHR: slot in the character-device table (chr.h) */
 };
 
 #define MAX_FDS 128

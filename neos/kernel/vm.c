@@ -242,14 +242,21 @@ struct vma *vma_find(struct aspace *as, u64 addr)
 int vma_add(struct aspace *as, u64 start, u64 end, int prot, struct inode *ino, u64 off)
 {
     if (as->nvma == MAX_VMAS) return -1;
-    as->vma[as->nvma++] = (struct vma){ start, end, (u8)prot, ino, off, NULL };
+    as->vma[as->nvma++] = (struct vma){ start, end, (u8)prot, ino, off, NULL, 0 };
+    return 0;
+}
+
+int vma_add_phys(struct aspace *as, u64 start, u64 end, int prot, u64 phys)
+{
+    if (as->nvma == MAX_VMAS) return -1;
+    as->vma[as->nvma++] = (struct vma){ start, end, (u8)prot, NULL, 0, NULL, phys };
     return 0;
 }
 
 int vma_add_shm(struct aspace *as, u64 start, u64 end, int prot, u64 off, struct shm *shm)
 {
     if (as->nvma == MAX_VMAS) { shm_release(shm); return -1; }
-    as->vma[as->nvma++] = (struct vma){ start, end, (u8)prot, NULL, off, shm };
+    as->vma[as->nvma++] = (struct vma){ start, end, (u8)prot, NULL, off, shm, 0 };
     return 0;
 }
 
@@ -261,10 +268,10 @@ static void vma_remove_range(struct aspace *as, u64 s, u64 e)       /* trims / s
         if (v.start >= s && v.end <= e) { as->vma[i--] = as->vma[--as->nvma]; if (v.shm) shm_release(v.shm); continue; }
         if (v.start < s && v.end > e) {                                 /* hole in the middle: split */
             as->vma[i].end = s;
-            struct vma hi = v; hi.start = e; if (hi.ino || hi.shm) hi.off += e - v.start;
+            struct vma hi = v; hi.start = e; if (hi.ino || hi.shm) hi.off += e - v.start; if (hi.phys) hi.phys += e - v.start;
             if (as->nvma < MAX_VMAS) { as->vma[as->nvma++] = hi; if (hi.shm) hi.shm->refs++; }
         } else if (v.start < s) as->vma[i].end = s;
-        else { if (v.ino || v.shm) as->vma[i].off += e - v.start; as->vma[i].start = e; }
+        else { if (v.ino || v.shm) as->vma[i].off += e - v.start; if (v.phys) as->vma[i].phys += e - v.start; as->vma[i].start = e; }
     }
 }
 
@@ -298,7 +305,7 @@ int vm_mprotect(struct aspace *as, u64 start, u64 len, int prot)
         struct vma v = as->vma[i];
         if (v.end <= start || v.start >= end) continue;
         u64 s = v.start > start ? v.start : start, e = v.end < end ? v.end : end;
-        tmp[nt++] = (struct vma){ s, e, (u8)prot, v.ino, v.off + (v.ino || v.shm ? s - v.start : 0), v.shm };
+        tmp[nt++] = (struct vma){ s, e, (u8)prot, v.ino, v.off + (v.ino || v.shm ? s - v.start : 0), v.shm, v.phys ? v.phys + (s - v.start) : 0 };
         if (v.shm) v.shm->refs++;                                    /* held across the remove / re-add below */
     }
     vma_remove_range(as, start, end);
@@ -329,6 +336,13 @@ int vm_fault(struct aspace *as, u64 addr, int write, int exec)
     if (!pte) { irq_restore(flg); return -1; }
     if (*pte & P_PRESENT) { irq_restore(flg); return -1; }             /* present: a protection fault, or another thread just mapped it */
     if (as->pages >= as->limit) { irq_restore(flg); return -1; }
+    if (v->phys) {                                                      /* device memory: map the physical page straight in */
+        *pte = (v->phys + (addr - v->start)) | P_PRESENT | P_USER | P_SHARED | ((v->prot & PROT_WRITE) ? P_WRITE : 0) | P_NX;
+        as->pages++;
+        __asm__ volatile("invlpg (%0)" :: "r"(addr) : "memory");
+        irq_restore(flg);
+        return 0;
+    }
     if (v->shm) {                                                       /* shared page: the object owns the frame */
         struct shm *sh = v->shm; u64 idx = (v->off + (addr - v->start)) >> 12;
         if (idx >= sh->npages) { irq_restore(flg); return -1; }

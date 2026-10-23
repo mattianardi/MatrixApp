@@ -138,6 +138,9 @@ test: all
 	@$(MAKE) --no-print-directory browsertest
 	@$(MAKE) --no-print-directory netappstest
 	@$(MAKE) --no-print-directory pkgtest
+	@$(MAKE) --no-print-directory hiltest
+	@$(MAKE) --no-print-directory serialtest
+	@$(MAKE) --no-print-directory fbtest
 	@$(MAKE) --no-print-directory disktest
 
 shelltest: all
@@ -173,6 +176,12 @@ pkgtest: all
 hiltest: all
 	@python3 tools/check-hil.py | tail -1
 
+serialtest: all
+	@python3 tools/check-serial.py | tail -1
+
+fbtest: all
+	@python3 tools/check-fb.py | tail -1
+
 disktest: all
 	@tools/check-disk.sh
 
@@ -185,4 +194,4 @@ agenttest: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run gui iso run-iso test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest pkgtest hiltest disktest clean
+.PHONY: all run gui iso run-iso test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest pkgtest hiltest serialtest fbtest disktest clean

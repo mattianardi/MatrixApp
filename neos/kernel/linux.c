@@ -1,5 +1,7 @@
 #include "proc.h"
 #include "sock.h"
+#include "serial.h"
+#include "chr.h"
 #include "fs.h"
 #include "agent.h"
 #include "neos_api.h"
@@ -83,6 +85,8 @@ static long stat_file(struct proc *p, struct file *f, u64 ust)
     switch (f->type) {
     case FT_INODE: case FT_DIR: return stat_inode(p, f->ino, ust);
     case FT_TTY: put_stat(st, S_IFCHR | 0620, 3, 0, vfs_now(), 0x500); break;
+    case FT_SERIAL: put_stat(st, S_IFCHR | 0666, 4, 0, vfs_now(), 0x400 + (u64)f->serial); break;
+    case FT_CHR: put_stat(st, S_IFCHR | 0666, 5, 0, vfs_now(), 0x1300 + (u64)f->chr); break;
     case FT_SOCK: put_stat(st, 0140000 | 0777, 5, 0, vfs_now(), 0); break;
     default: put_stat(st, S_IFIFO | 0600, 4, 0, vfs_now(), 0); break;
     }
@@ -102,9 +106,11 @@ static long do_open(struct proc *p, char *abs, int flags, u32 mode)
     int dir = (i->mode & S_IFMT) == S_IFDIR;
     if (dir && (flags & O_ACCMODE)) return -E_ISDIR;
     if ((flags & O_DIRECTORY) && !dir) return -E_NOTDIR;
-    struct file *f = file_new(dir ? FT_DIR : i->dev == DEV_TTY ? FT_TTY : FT_INODE, flags);
+    int ser = i->dev >= DEV_SERIAL0 && i->dev < DEV_SERIAL0 + SER_MAX, chr = i->dev >= DEV_CHR0 && i->dev < DEV_CHR0 + CHR_MAX;
+    if (chr) { const struct chrops *o = chr_ops(i->dev - DEV_CHR0); if (!o) return -E_NODEV; if (o->open && o->open(chr_minor(i->dev - DEV_CHR0)) < 0) return -E_NODEV; }
+    struct file *f = file_new(dir ? FT_DIR : i->dev == DEV_TTY ? FT_TTY : ser ? FT_SERIAL : chr ? FT_CHR : FT_INODE, flags);
     if (!f) return -E_NOMEM;
-    f->ino = i; inode_ref(i);
+    f->ino = i; inode_ref(i); if (ser) f->serial = i->dev - DEV_SERIAL0; if (chr) f->chr = i->dev - DEV_CHR0;
     if ((flags & O_TRUNC) && (flags & O_ACCMODE) && !dir && !i->dev) inode_truncate(i, 0);
     int fd = fdt_install(p->fds, f, 0, (flags & O_CLOEXEC) != 0);
     if (fd < 0) file_put(f);
@@ -130,7 +136,7 @@ static long rw_user(struct proc *p, struct file *f, u64 ubuf, u64 len, int write
         }
         if (r < 0) { kfree(b); return total ? total : r; }
         total += r;
-        if ((size_t)r < c || f->type == FT_TTY || f->type == FT_PIPE_R || f->type == FT_SOCK || f->type == FT_EVENTFD) break;      /* short read / interactive: return what we have */
+        if ((size_t)r < c || f->type == FT_TTY || f->type == FT_SERIAL || f->type == FT_CHR || f->type == FT_PIPE_R || f->type == FT_SOCK || f->type == FT_EVENTFD) break;      /* short read / interactive: return what we have */
     }
     kfree(b);
     return total;
@@ -194,6 +200,15 @@ static long sys_mmap(struct proc *p, u64 addr, u64 len, int prot, int flags, lon
     if (!(flags & MAP_ANON)) {
         struct file *f = fdt_get(p->fds, (int)fd);
         if (!f) return -E_BADF;
+        if (f->type == FT_CHR) {                                         /* device memory (/dev/fb0) */
+            const struct chrops *o = chr_ops(f->chr);
+            if (!o->mmap) return -E_NODEV;
+            u64 va;
+            if (flags & MAP_FIXED) { if ((addr & 0xFFF) || addr < 0x1000 || addr + plen > USER_TOP) return -E_INVAL; vm_munmap(&p->as, addr, plen); va = addr; }
+            else { va = vm_find_gap(&p->as, addr && addr >= 0x10000 ? addr : p->mmap_next, plen); if (!va) return -E_NOMEM; if (!addr) p->mmap_next = va + plen; }
+            int e = o->mmap(chr_minor(f->chr), p, va, plen, prot, off);
+            return e ? e : (long)va;
+        }
         if (f->type != FT_INODE || (f->ino->mode & S_IFMT) != S_IFREG || f->ino->dev) return -E_NODEV;
         ino = f->ino;
     }
@@ -380,6 +395,40 @@ static long sys_poll(struct proc *p, u64 ufds, u64 nfds, long timeout_ms)
     }
 }
 
+static long sys_select(struct proc *p, int nfds, u64 ur, u64 uw, u64 ue, u64 utmo, int is_timespec)
+{
+    if (nfds < 0 || nfds > 1024) return -E_INVAL;
+    if (nfds > MAX_FDS) nfds = MAX_FDS;
+    size_t nb = ((size_t)nfds + 7) / 8;
+    u8 in[3][16], out[3][16]; u64 uptr[3] = { ur, uw, ue };
+    memset(in, 0, sizeof in);
+    for (int k = 0; k < 3; k++) if (uptr[k] && nb && copy_from_user(&p->as, in[k], uptr[k], nb)) return -E_FAULT;
+    long timeout_ms = -1;
+    if (utmo) {
+        u64 ts[2]; if (copy_from_user(&p->as, ts, utmo, 16)) return -E_FAULT;
+        timeout_ms = (long)(ts[0] * 1000 + ts[1] / (is_timespec ? 1000000 : 1000));
+    }
+    u64 deadline = timeout_ms < 0 ? ~0ull : ticks + ms_to_ticks((u64)timeout_ms);
+    static const int ev[3] = { 1, 4, 0 };
+    for (;;) {
+        int ready = 0; memset(out, 0, sizeof out);
+        for (int fd = 0; fd < nfds; fd++) for (int k = 0; k < 2; k++) {
+            if (!(in[k][fd / 8] & (1 << (fd % 8)))) continue;
+            struct file *f = fdt_get(p->fds, fd);
+            if (!f) return -E_BADF;
+            if (file_poll_ready(f, ev[k]) & (ev[k] | 0x18)) { out[k][fd / 8] |= (u8)(1 << (fd % 8)); ready++; }
+        }
+        if (ready || timeout_ms == 0 || (deadline != ~0ull && ticks >= deadline)) {
+            for (int k = 0; k < 3; k++) if (uptr[k] && nb && copy_to_user(&p->as, uptr[k], out[k], nb)) return -E_FAULT;
+            return ready;
+        }
+        if (sig_interrupted(p)) return -E_INTR;
+        extern int tty_pump(void);
+        tty_pump();
+        thread_sleep_ms(1);
+    }
+}
+
 static long sys_ioctl(struct proc *p, int fd, u64 req, u64 arg)
 {
     struct file *f = fdt_get(p->fds, fd);
@@ -389,6 +438,8 @@ static long sys_ioctl(struct proc *p, int fd, u64 req, u64 arg)
         if (req == 0x541B) { int n = sock_nread(f->sock); return copy_to_user(&p->as, arg, &n, 4) ? -E_FAULT : 0; }
         return -E_NOTTY;
     }
+    if (f->type == FT_SERIAL) return serial_ioctl(f->serial, req, arg, p);
+    if (f->type == FT_CHR) { const struct chrops *o = chr_ops(f->chr); return o->ioctl ? o->ioctl(chr_minor(f->chr), req, arg, p) : -E_NOTTY; }
     if (f->type != FT_TTY) return -E_NOTTY;
     switch (req) {
     case 0x5401: {                                                         /* TCGETS: a cooked, echoing terminal */
@@ -727,6 +778,8 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 19: RET(sys_readv(p, (int)a0, a1, (long)a2, 0));
     case 20: RET(sys_readv(p, (int)a0, a1, (long)a2, 1));
     case 7:  RET(sys_poll(p, a0, a1, (int)a2));
+    case 23: RET(sys_select(p, (int)a0, a1, a2, a3, a4, 0));
+    case 270: RET(sys_select(p, (int)a0, a1, a2, a3, a4, 1));
     case 436: {                                                           /* close_range(first, last, flags): subprocess/spawn use it to close everything above stderr */
         u64 lo = a0, hi = a1 < MAX_FDS ? a1 : MAX_FDS - 1;
         for (u64 fd = lo; fd <= hi; fd++) {

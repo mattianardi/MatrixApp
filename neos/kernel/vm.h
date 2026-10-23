@@ -14,7 +14,7 @@
 #define MAX_VMAS 256
 struct inode;
 struct shm;                                                                   /* pages shared between address spaces (MAP_SHARED, kept across fork) */
-struct vma { u64 start, end; u8 prot; struct inode *ino; u64 off; struct shm *shm; };   /* ino != NULL: private file mapping; shm != NULL: shared (off = offset into the object) */
+struct vma { u64 start, end; u8 prot; struct inode *ino; u64 off; struct shm *shm; u64 phys; };   /* ino != NULL: private file mapping; shm != NULL: shared (off = offset into the object); phys != 0: device memory (frame buffer) */
 struct aspace { u64 pml4; size_t pages, limit; int nvma; struct vma vma[MAX_VMAS]; };
 
 void vm_init(void);
@@ -33,6 +33,7 @@ int  vma_add(struct aspace *as, u64 start, u64 end, int prot, struct inode *ino,
 struct vma *vma_find(struct aspace *as, u64 addr);
 struct shm *shm_get(struct inode *ino, u64 npages);          /* shared object for a file (one per inode) or a fresh anonymous one; takes a reference */
 int  vma_add_shm(struct aspace *as, u64 start, u64 end, int prot, u64 off, struct shm *shm);   /* consumes the reference from shm_get */
+int  vma_add_phys(struct aspace *as, u64 start, u64 end, int prot, u64 phys);   /* map device memory (never freed with the address space) */
 void shm_sync(struct shm *s);                                /* write file-backed shared pages back to the file (msync) */
 u64  shm_key(const struct vma *v, u64 addr);                 /* identity of a shared word (futex key) */
 int  vm_fault(struct aspace *as, u64 addr, int write, int exec);    /* demand-page one page; 0 = handled */

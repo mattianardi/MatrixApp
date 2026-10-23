@@ -1,4 +1,6 @@
 #include "fdt.h"
+#include "serial.h"
+#include "chr.h"
 #include "shell.h"
 #include "sock.h"
 
@@ -36,7 +38,8 @@ void file_put(struct file *f)
     int last = --f->refs == 0;
     irq_restore(fl);
     if (!last) return;
-    if (f->ino && (f->type == FT_INODE || f->type == FT_DIR || f->type == FT_TTY)) inode_unref(f->ino);
+    if (f->ino && (f->type == FT_INODE || f->type == FT_DIR || f->type == FT_TTY || f->type == FT_SERIAL || f->type == FT_CHR)) inode_unref(f->ino);
+    if (f->type == FT_CHR) { const struct chrops *o = chr_ops(f->chr); if (o->close) o->close(chr_minor(f->chr)); }
     if (f->sock) sock_free(f->sock);
     if (f->ep) kfree(f->ep);
     if (f->pipe) {
@@ -69,6 +72,13 @@ long file_read(struct file *f, void *buf, size_t n)
         memcpy(buf, &v, 8); return 8;
     }
     case FT_TTY: return tty_read(buf, n, f->flags & O_NONBLOCK);
+    case FT_SERIAL: return serial_read(f->serial, buf, n, f->flags & O_NONBLOCK);
+    case FT_CHR: {
+        const struct chrops *o = chr_ops(f->chr);
+        if (o->read) return o->read(chr_minor(f->chr), buf, n, f->flags & O_NONBLOCK);
+        if (o->size) { u64 sz = o->size(chr_minor(f->chr)); (void)sz; }
+        return -E_INVAL;
+    }
     case FT_PIPE_R: {
         struct pipe *p = f->pipe;
         u64 fl = irq_save();
@@ -107,6 +117,17 @@ long file_write(struct file *f, const void *buf, size_t n)
         wake_on(f, 64); return 8;
     }
     case FT_TTY: tty_write(buf, n); return (long)n;
+    case FT_SERIAL: return serial_write(f->serial, buf, n, f->flags & O_NONBLOCK);
+    case FT_CHR: {
+        const struct chrops *o = chr_ops(f->chr);
+        if (o->size && o->mmap) {                                       /* memory-like device (frame buffer): write at the file offset */
+            extern void *gui_fb_ptr(void);
+            u64 sz = o->size(chr_minor(f->chr)); if ((u64)f->off >= sz) return -28;
+            size_t c = n < sz - (u64)f->off ? n : (size_t)(sz - (u64)f->off);
+            memcpy((u8 *)gui_fb_ptr() + f->off, buf, c); f->off += (i64)c; return (long)c;
+        }
+        return o->write ? o->write(chr_minor(f->chr), buf, n) : -E_INVAL;
+    }
     case FT_PIPE_W: {
         struct pipe *p = f->pipe;
         const u8 *in = buf; size_t done = 0;
@@ -137,6 +158,8 @@ int file_poll_ready(struct file *f, int events)
     if (f->type == FT_PIPE_R) { if (events & 1) r |= (f->pipe->head != f->pipe->tail || !f->pipe->writers) ? 1 : 0; }
     else if (f->type == FT_PIPE_W) { if (events & 4) r |= 4; }
     else if (f->type == FT_TTY) { if ((events & 1) && tty_has_input()) r |= 1; if (events & 4) r |= 4; }
+    else if (f->type == FT_SERIAL) r = serial_poll(f->serial, events);
+    else if (f->type == FT_CHR) { const struct chrops *o = chr_ops(f->chr); r = o->poll ? o->poll(chr_minor(f->chr), events) : (events & 5); }
     else if (f->type == FT_SOCK) r = sock_poll(f->sock, events);
     else if (f->type == FT_EVENTFD) { if ((events & 1) && f->evcount) r |= 1; if (events & 4) r |= 4; }
     else r = events & 5;
@@ -148,6 +171,8 @@ u32 file_in_gen(struct file *f)
     switch (f->type) {
     case FT_SOCK: return sock_in_gen(f->sock);
     case FT_EVENTFD: return f->evgen;
+    case FT_SERIAL: return serial_in_gen(f->serial);
+    case FT_CHR: { const struct chrops *o = chr_ops(f->chr); return o->gen ? o->gen(chr_minor(f->chr)) : 0; }
     case FT_PIPE_R: return f->pipe->head;
     default: return 0;
     }

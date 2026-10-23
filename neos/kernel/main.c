@@ -1,5 +1,8 @@
 #include "kernel.h"
 #include "usb.h"
+#include "serial.h"
+void evdev_init(void);
+void fbdev_init(void);
 #include "shell.h"
 #include "varbus.h"
 #include "net.h"
@@ -102,6 +105,7 @@ static void init_thread(void *arg)
     neofs_start();
     usb_init();
     usb_start();
+    serial_hw_init();
     shell_start();
     ui_start();
     gui_start();
@@ -155,6 +159,8 @@ void kmain(u32 magic, u64 mbi_phys)
     linux_init();
     ui_init();
     gui_init();
+    evdev_init();
+    fbdev_init();
     console_async_start();
     bus_start();
 

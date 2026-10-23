@@ -87,17 +87,77 @@ static int msc_rw(struct xdev *d, struct msc *m, int write, u64 lba, u32 n, void
     return 0;
 }
 
+
+/* ---------------------------------------------------------------- USB serial: CDC-ACM (kind 6), FTDI (kind 7), CP210x (kind 8) */
+struct usbser { int kind, in_dci, out_dci, maxin, comm_iface, id; u8 *buf; u64 buf_phys; };
+static void ser_arm(struct xdev *d, struct usbser *s)
+{
+    struct epstate *e = &d->ep[s->in_dci];
+    e->done = 0;
+    ring_push(&e->ring, s->buf_phys, (u32)s->maxin, (T_NORMAL << 10) | (1 << 5) | (1 << 2));
+    ring_db(d->pub.slot, s->in_dci);
+}
+static u32 ftdi_divisor(u32 baud)                                       /* libftdi's ftdi_to_clkbits(): 48 MHz clock, /16 */
+{
+    static const u8 frac_code[8] = { 0, 3, 2, 4, 1, 5, 6, 7 };
+    const u32 clk = 48000000, clk_div = 16;
+    if (baud >= clk / clk_div) return 0;
+    if (baud >= clk / (clk_div + clk_div / 2)) return 1;
+    if (baud >= clk / (2 * clk_div)) return 2;
+    u32 divisor = clk * 16 / clk_div / baud, best = (divisor & 1) ? divisor / 2 + 1 : divisor / 2;
+    if (best > 0x20000) best = 0x1ffff;
+    return (best >> 3) | ((u32)frac_code[best & 7] << 14);
+}
+static void ser_apply(struct xdev *d, struct usbser *s)
+{
+    u32 baud; int bits, par, stop2, dtr, rts;
+    serial_params(s->id, &baud, &bits, &par, &stop2, &dtr, &rts);
+    if (!baud) baud = 9600;
+    if (s->kind == 7) {
+        u32 enc = ftdi_divisor(baud);
+        ctrl_xfer(d, 0x40, 3, (u16)(enc & 0xFFFF), (u16)(enc >> 16), 0, NULL);                        /* SIO_SET_BAUD_RATE */
+        ctrl_xfer(d, 0x40, 4, (u16)(bits | (par == 1 ? 0x100 : par == 2 ? 0x200 : 0) | (stop2 ? 0x1000 : 0)), 0, 0, NULL);   /* SIO_SET_DATA */
+        ctrl_xfer(d, 0x40, 1, (u16)((dtr ? 0x0101 : 0x0100) | (rts ? 0x0202 : 0x0200)), 0, 0, NULL);  /* SIO_SET_MODEM_CTRL */
+    } else if (s->kind == 6) {
+        u8 lc[7] = { (u8)baud, (u8)(baud >> 8), (u8)(baud >> 16), (u8)(baud >> 24), (u8)(stop2 ? 2 : 0), (u8)par, (u8)bits };
+        ctrl_xfer(d, 0x21, 0x20, 0, (u16)s->comm_iface, 7, lc);                                       /* SET_LINE_CODING */
+        ctrl_xfer(d, 0x21, 0x22, (u16)((dtr ? 1 : 0) | (rts ? 2 : 0)), (u16)s->comm_iface, 0, NULL);   /* SET_CONTROL_LINE_STATE */
+    } else {
+        u8 b4[4] = { (u8)baud, (u8)(baud >> 8), (u8)(baud >> 16), (u8)(baud >> 24) };
+        ctrl_xfer(d, 0x41, 0x1E, 0, (u16)s->comm_iface, 4, b4);                                       /* SET_BAUDRATE */
+        ctrl_xfer(d, 0x41, 0x03, (u16)(bits << 8 | par << 4 | (stop2 ? 2 : 0)), (u16)s->comm_iface, 0, NULL);   /* SET_LINE_CTL */
+        ctrl_xfer(d, 0x41, 0x07, (u16)((dtr ? 1 : 0) | (rts ? 2 : 0) | 0x0300), (u16)s->comm_iface, 0, NULL);  /* SET_MHS */
+    }
+}
+static void ser_poll(struct xdev *d, struct usbser *s)
+{
+    if (serial_dirty(s->id)) ser_apply(d, s);
+    struct epstate *e = &d->ep[s->in_dci];
+    if (e->done) {
+        if (e->code == 1 || e->code == 13) {
+            int n = s->maxin - (int)e->residual;
+            if (s->kind == 7) {                                         /* FTDI: two modem-status bytes open every packet */
+                for (int off = 0; off < n; off += 64) { int m = n - off < 64 ? n - off : 64; if (m > 2) serial_rx(s->id, s->buf + off + 2, m - 2); }
+            } else if (n > 0) serial_rx(s->id, s->buf, n);
+        }
+        ser_arm(d, s);
+    }
+    u8 t[64]; int k = serial_tx_pull(s->id, t, 64);
+    if (k) bulk_xfer(d, s->out_dci, t, (u32)k, 1, 200, NULL);
+}
+
 /* ---------------------------------------------------------------- classification of a configuration descriptor */
 static void classify(struct xdev *d, u8 *cfg, int total, int cfgval)
 {
     int iface = -1, icls = 0, isub = 0, iproto = 0, ep_in = 0, ep_out = 0, ep_in_mps = 0, ep_out_mps = 0, ep_in_iv = 0, ep_in_type = 0, ep_out_type = 0, found = 0;
-    int ecm_mac_idx = 0;
+    int ecm_mac_idx = 0, comm_iface = -1, comm_sub = 0;
     for (int i = 0; i + 2 <= total && cfg[i];) {
         u8 len = cfg[i], type = cfg[i + 1];
         if (type == 4 && len >= 9) {
             if (found) break;                                           /* first interface that is one of ours wins */
             iface = cfg[i + 2]; icls = cfg[i + 5]; isub = cfg[i + 6]; iproto = cfg[i + 7];
             ep_in = ep_out = 0;
+            if (icls == 2) { comm_iface = iface; comm_sub = isub; }
         } else if (type == 5 && len >= 7) {
             int addr = cfg[i + 2], attr = cfg[i + 3] & 3, mps = cfg[i + 4] | cfg[i + 5] << 8, iv = cfg[i + 6];
             if (addr & 0x80) { if (!ep_in || attr == 3) { ep_in = addr; ep_in_mps = mps; ep_in_iv = iv; ep_in_type = attr; } }
@@ -112,7 +172,10 @@ static void classify(struct xdev *d, u8 *cfg, int total, int cfgval)
         } else if (icls == 3 && ep_in && d->pub.vid == 0x0627 && d->pub.pid == 0x0001) {       /* QEMU's absolute pointer */
             d->pub.kind = 3; found = 1;
         } else if (icls == 8 && isub == 6 && iproto == 0x50 && ep_in && ep_out) { d->pub.kind = 4; found = 1; }
+        else if (icls == 10 && ep_in_type == 2 && ep_out_type == 2 && comm_sub == 2) { d->pub.kind = 6; found = 1; }         /* CDC data interface of an ACM modem */
         else if (icls == 10 && ep_in_type == 2 && ep_out_type == 2) { d->pub.kind = 5; found = 1; (void)ecm_mac_idx; }
+        else if (icls == 0xFF && ep_in_type == 2 && ep_out_type == 2 && d->pub.vid == 0x0403) { d->pub.kind = 7; found = 1; }  /* FTDI */
+        else if (icls == 0xFF && ep_in_type == 2 && ep_out_type == 2 && d->pub.vid == 0x10C4) { d->pub.kind = 8; found = 1; }  /* Silicon Labs CP210x */
         if (!found) { iface = -1; continue; }
         /* set up the endpoints and start the driver */
         if (ctrl_xfer(d, 0x00, 9, (u16)cfgval, 0, 0, NULL)) { d->pub.kind = 0; return; }
@@ -138,6 +201,25 @@ static void classify(struct xdev *d, u8 *cfg, int total, int cfgval)
             m->ready = 1; blk_dev = d;
         } else if (d->pub.kind == 5) {
             d->pub.kind = 0;                                            /* CDC-ECM networking: see usb_ecm.c once present */
+        } else if (d->pub.kind >= 6) {
+            struct usbser *s = kmalloc(sizeof *s); if (!s) { d->pub.kind = 0; return; }
+            memset(s, 0, sizeof *s);
+            u64 pg = pmm_alloc(1); if (!pg) { kfree(s); d->pub.kind = 0; return; }
+            s->buf = P2V(pg); s->buf_phys = pg; s->kind = d->pub.kind;
+            s->in_dci = (ep_in & 15) * 2 + 1; s->out_dci = (ep_out & 15) * 2; s->maxin = ep_in_mps > 512 ? 512 : ep_in_mps;
+            s->comm_iface = d->pub.kind == 6 ? comm_iface : 0;
+            struct epcfg c2[2] = { { s->in_dci, 6, ep_in_mps, 0 }, { s->out_dci, 2, ep_out_mps, 0 } };
+            if (configure(d, c2, 2)) { d->pub.kind = 0; kfree(s); return; }
+            static int n_usb, n_acm;
+            char nm[16]; ksnprintf(nm, sizeof nm, d->pub.kind == 6 ? "ttyACM%d" : "ttyUSB%d", d->pub.kind == 6 ? n_acm++ : n_usb++);
+            s->id = serial_register(nm, s);
+            if (s->id < 0) { d->pub.kind = 0; kfree(s); return; }
+            d->pub.priv = s;
+            if (d->pub.kind == 7) { ctrl_xfer(d, 0x40, 0, 0, 0, 0, NULL); }                                   /* SIO_RESET */
+            else if (d->pub.kind == 8) { ctrl_xfer(d, 0x41, 0x00, 1, 0, 0, NULL); }                           /* IFC_ENABLE */
+            ser_apply(d, s);
+            ser_arm(d, s);
+            kprintf("[usb] serial port /dev/%s\n", nm);
         }
         return;
     }
@@ -148,6 +230,7 @@ static void class_poll(void)
     for (int i = 0; i < USB_MAX_DEV; i++) {
         struct xdev *d = &devs[i];
         if (!d->pub.used || !d->pub.priv) continue;
+        if (d->pub.kind >= 6) { ser_poll(d, d->pub.priv); continue; }
         if (d->pub.kind >= 1 && d->pub.kind <= 3) {
             struct hid *h = d->pub.priv;
             if (d->ep[h->dci].done) { if (d->ep[h->dci].code == 1 || d->ep[h->dci].code == 13) hid_report(d, h); hid_arm(d, h); }

@@ -168,6 +168,14 @@ Python 3.13 + glibc + ca-certificates arrivano come moduli di avvio (`PYBUNDLE`)
 **Sicurezza**: il kernel parla solo HTTP semplice, quindi `pkg` lo rifiuta finché non si imposta `pkg.allow_insecure on`;
 integrità reale con `pkg.index_sha256`. I pacchetti sono validati per intero (dimensione + SHA-256) prima di scrivere.
 
+## Compatibilità applicativa (Linux, Windows, Python, LabVIEW)
+
+Obiettivo: eseguire applicazioni, librerie e (dove possibile) driver di Linux e di Windows, i runtime LabVIEW e le applicazioni Python.
+`docs/COMPAT.md` elenca onestamente cosa funziona e cosa manca; `tools/compat-scan.py` misura una applicazione *prima* di
+installarla (`pe` per Windows, `py` per Python, `elf` per Linux) e `make hiltest` esegue dentro NEOS le sonde di un'applicazione Python da banco prova.
+Novità di questo livello: memoria condivisa fra processi (`MAP_SHARED`, `multiprocessing`), `AF_UNIX`, priorità `SCHED_FIFO`,
+registro di Windows, Winsock, ricerca delle DLL in `C:\Windows\System32` e `PATH`, porte seriali (`/dev/ttyS1`, `/dev/ttyUSB0`, `/dev/ttyACM0`).
+
 ## USB
 
 Stack **xHCI** (polling): enumerazione porte, tastiera/mouse HID (boot protocol, tablet QEMU), **memorie di massa**
@@ -208,7 +216,9 @@ persistenza su disco, workspace grafico e browser.
 | Windows: solo PE64 con API Win32 di base | niente GUI Win32, DirectX, servizi, registro completo, PE a 32 bit |
 | Browser: niente JavaScript/CSS/HTTPS | le web-app moderne con JS non funzionano |
 | SMP/APIC (un solo core), tickless, priority inheritance | da fare |
-| Wi-Fi, audio, GPU, hub USB, NIC Realtek RTL8168 / Intel I219 | da fare |
+| Wi-Fi, audio, GPU, hub USB, NIC Realtek RTL8168 / Intel I219, CH340 | da fare |
+| GUI Win32 (user32/gdi32), COM completo, .NET; Qt/Tk/X11 per programmi Linux; JavaScript nel browser | da fare (vedi `docs/COMPAT.md`) |
+| `/dev/bus/usb`, sysfs, SocketCAN, driver NI (NI-DAQmx/NI-VISA) | non disponibili |
 | Hardware reale | provato solo su QEMU (xHCI/USB inclusi) |
 
 Il non-determinismo noto: il kernel gira su QEMU/TCG, quindi le misure di jitter (`rt`) riflettono l'host;

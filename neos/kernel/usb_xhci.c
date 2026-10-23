@@ -1,4 +1,5 @@
 #include "usb.h"
+#include "serial.h"
 #include "net.h"
 
 /*
@@ -222,7 +223,7 @@ static void enumerate_port(int port)
     if (!(sc & 2)) {                                                    /* USB 2 ports need an explicit reset; USB 3 ports train by themselves */
         wr32(pr, 0, (sc & PORT_KEEP) | (1u << 4));                      /* PR (keep the preserved RW bits; never write 1 to PED or the change bits by accident) */
         for (int i = 0; i < 500; i++) { thread_sleep_ms(2); sc = rd32(pr, 0); if (!(sc & (1u << 4)) && (sc & 2)) break; }
-        if (!(sc & 2)) return;
+        if (!(sc & 2)) { kprintf("[usb] port %d: reset did not enable the port (status %08x)\n", port, sc); return; }
         thread_sleep_ms(20);
     }
     wr32(pr, 0, (rd32(pr, 0) & PORT_KEEP) | PORT_CHANGES);             /* acknowledge change bits (write-1-to-clear) */
@@ -238,7 +239,7 @@ static void enumerate_port(int port)
     u8 cfg[256];
     if (ctrl_xfer(d, 0x80, 6, 0x0200, 0, 255, cfg)) { kprintf("[usb] port %d: no configuration descriptor\n", port); d->pub.used = 0; return; }
     classify(d, cfg, (int)(cfg[2] | cfg[3] << 8 > 255 ? 255 : (cfg[2] | cfg[3] << 8)), cfg[5]);
-    ksnprintf(d->pub.name, sizeof d->pub.name, "%04x:%04x %s", d->pub.vid, d->pub.pid, d->pub.kind == 1 ? "keyboard" : d->pub.kind == 2 ? "mouse" : d->pub.kind == 3 ? "tablet" : d->pub.kind == 4 ? "storage" : d->pub.kind == 5 ? "network (CDC-ECM)" : "unsupported");
+    ksnprintf(d->pub.name, sizeof d->pub.name, "%04x:%04x %s", d->pub.vid, d->pub.pid, d->pub.kind == 1 ? "keyboard" : d->pub.kind == 2 ? "mouse" : d->pub.kind == 3 ? "tablet" : d->pub.kind == 4 ? "storage" : d->pub.kind == 5 ? "network (CDC-ECM)" : d->pub.kind == 6 ? "serial (CDC-ACM)" : d->pub.kind == 7 ? "serial (FTDI)" : d->pub.kind == 8 ? "serial (CP210x)" : "unsupported");
     kprintf("[usb] port %d: %s (class %02x)\n", port, d->pub.name, d->pub.cls);
 }
 

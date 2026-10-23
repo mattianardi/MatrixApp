@@ -12,6 +12,7 @@
  * The renderer is immediate-mode: each frame rebuilds the list of clickable regions it draws.
  */
 static int SW = 1024, SH = 768;                 /* screen size: 1024x768 unless the loader gave us another linear framebuffer */
+u64 gui_fb_phys; volatile int gui_suspended;                        /* /dev/fb0 owners take the screen: the workspace stops drawing */
 static u32 fb_pitch = 1024 * 4;                  /* bytes per scanline of the real framebuffer */
 extern const u32 *boot_mbi;
 #include "font8x16.h"
@@ -392,6 +393,7 @@ static void gui_thread(void *arg)
     for (;;) {
         thread_sleep_ms((u64)t_ms->val / 10 > 20 ? (u64)t_ms->val / 10 : 20);
         if (!t_enable->val) continue;
+        if (gui_suspended) { dirty = 1; continue; }
         int mx, my, mb, seq; mouse_state(&mx, &my, &mb, &seq);
         sample();
         key_grab = wins[W_BROWSER].visible && focus == W_BROWSER;
@@ -443,7 +445,7 @@ void gui_init(void)
     if (!fbaddr) return;
     u64 pb = pmm_alloc((size_t)SW * SH * 4 / 4096 + 1), pw = pmm_alloc((size_t)SW * SH * 4 / 4096 + 1), pc = pmm_alloc(1);
     if (!pb || !pw || !pc) return;
-    bb = P2V(pb); wall = P2V(pw); fb = P2V(fbaddr);
+    bb = P2V(pb); wall = P2V(pw); fb = P2V(fbaddr); gui_fb_phys = fbaddr;
     clx0 = cly0 = 0; clx1 = SW; cly1 = SH;
     console_use_cells(P2V(pc));
     if (via_loader) { u16 *cl = console_cells(); for (int i = 0; i < VGA_ROWS * VGA_COLS; i++) cl[i] = 0x0720; }   /* a graphics-mode text window holds nothing useful */                                                  /* take the text cells before the legacy window disappears */
@@ -453,6 +455,9 @@ void gui_init(void)
     module_register("gui", "1.0", "graphical workspace on the Bochs VBE framebuffer: windows, mouse, taskbar");
     gui_on = 1;
 }
+
+void gui_fb_info(u64 *phys, int *w, int *h, int *pitch) { *phys = gui_fb_phys; *w = SW; *h = SH; *pitch = (int)fb_pitch; }
+void *gui_fb_ptr(void) { return fb; }
 
 void gui_start(void) { if (gui_on) { br_init(); thread_create("gui", 6, gui_thread, NULL); } }
 

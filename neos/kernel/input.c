@@ -18,6 +18,10 @@ static volatile int m_x = 512, m_y = 384, m_btn, m_seq, m_w = 1024, m_h = 768;
 static u8 m_pkt[3]; static int m_n;
 static int kinject[16]; static volatile u8 kih, kit;
 
+void evdev_key(int ch);
+void evdev_mouse_rel(int dx, int dy, int btn);
+void evdev_mouse_abs(int x, int y, int max, int btn);
+
 static void mouse_feed(u8 b)
 {
     if (m_n == 0 && !(b & 8)) return;                              /* out of sync: byte 0 always has bit 3 set */
@@ -30,6 +34,7 @@ static void mouse_feed(u8 b)
     m_y = y < 0 ? 0 : y >= m_h ? m_h - 1 : y;
     m_btn = m_pkt[0] & 7;
     m_seq++;
+    evdev_mouse_rel(dx, -dy, m_btn);
 }
 
 static void ps2_irq(void)
@@ -86,10 +91,12 @@ void input_mouse_rel(int dx, int dy, int btn)
     m_x = x < 0 ? 0 : x >= m_w ? m_w - 1 : x;
     m_y = y < 0 ? 0 : y >= m_h ? m_h - 1 : y;
     m_btn = btn & 7; m_seq++;
+    evdev_mouse_rel(dx, dy, btn & 7);
 }
 void input_mouse_abs(int x, int y, int max, int btn)
 {
     m_x = x * (m_w - 1) / max; m_y = y * (m_h - 1) / max; m_btn = btn & 7; m_seq++;
+    evdev_mouse_abs(x, y, max, btn & 7);
 }
 
 void mouse_state(int *x, int *y, int *btn, int *seq) { *x = m_x; *y = m_y; *btn = m_btn; *seq = m_seq; }
@@ -134,7 +141,7 @@ static int from_serial(void)
 
 static int from_ps2(void)
 {
-    if (ukt != ukh) { int c = ukeys[ukt]; ukt = (ukt + 1) & 31; return c; }
+    if (ukt != ukh) { int c = ukeys[ukt]; ukt = (ukt + 1) & 31; evdev_key(c); return c; }
     while (rt != rh) {
         u8 sc = ring[rt]; rt = (rt + 1) & 127;
         if (sc == 0xE0) { e0 = 1; continue; }
@@ -159,6 +166,7 @@ static int from_ps2(void)
         if (!c) continue;
         if (caps && is_alpha(c)) c = shift ? to_lower(c) : to_upper(c);
         if (ctrl && is_alpha(c)) c = to_lower(c) - 'a' + 1;
+        evdev_key(c);
         return c;
     }
     return -1;
