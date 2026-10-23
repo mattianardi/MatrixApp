@@ -13,6 +13,8 @@ void fbdev_init(void);
 #include "vfs.h"
 
 static struct tunable *t_test;
+extern const u8 _binary_embedded_initrd_start[] __attribute__((weak)), _binary_embedded_initrd_end[] __attribute__((weak));   /* web build: initrd linked into the image */
+static int initrd_embedded;
 static u32 boot_mods[8][2];          /* copied before any allocation: QEMU puts the multiboot structures in memory we would reuse */
 static int boot_nmods;
 
@@ -65,6 +67,7 @@ static void load_initrd(void)
             if (pkg_stage_cache(P2V(start), end - start, &e)) { kprintf("[cache] module %d rejected: %s\n", i, e); continue; }
             kprintf("[cache] package staged (%u KiB): `pkg install` works offline\n", kib);
         }
+        if (initrd_embedded && i == 0) continue;                       /* part of the kernel image: nothing to give back */
         pmm_free(start & ~0xFFFull, ((end + 0xFFF) & ~0xFFFull) / 4096 - (start & ~0xFFFull) / 4096);     /* the copy in the filesystem is enough: give the boot memory back */
     }
 }
@@ -132,6 +135,9 @@ void kmain(u32 magic, u64 mbi_phys)
     if (mb[0] & (1 << 3)) {
         const u32 *mods = P2V(mb[6]);
         for (u32 i = 0; i < mb[5] && i < 8; i++) { boot_mods[boot_nmods][0] = mods[i * 4]; boot_mods[boot_nmods][1] = mods[i * 4 + 1]; boot_nmods++; }
+    }
+    if (!boot_nmods && &_binary_embedded_initrd_start[0] != &_binary_embedded_initrd_end[0]) {      /* loader without module support (browser emulators) */
+        boot_mods[0][0] = (u32)V2P(_binary_embedded_initrd_start); boot_mods[0][1] = (u32)V2P(_binary_embedded_initrd_end); boot_nmods = 1; initrd_embedded = 1;
     }
     if (mb[0] & (1 << 2)) tune_bootargs((const char *)P2V(mb[4]));      /* kernel command line */
     module_register("kernel", NEOS_VERSION, "boot, interrupts, API");

@@ -96,6 +96,18 @@ $(BUILD)/matrix.elf: $(OBJS) kernel/linker.ld
 $(BUILD)/matrix32.elf: $(BUILD)/matrix.elf
 	objcopy -O elf32-i386 $< $@
 
+# ---- browser build: a kernel image with a small initrd linked in (emulators that load a kernel but no modules); see web/
+WEB_LINUX := hello_glibc hello_musl
+$(BUILD)/web/embedded_initrd: $(addprefix $(BUILD)/user/,hello) $(addprefix $(BUILD)/linux/,$(WEB_LINUX)) $(BUILD)/linux/busybox $(BUILD)/linux/nio $(BUILD)/linux/winrt $(BUILD)/linux/neosctl $(USERLAND) $(addprefix $(BUILD)/win/,$(addsuffix .exe,$(WIN_EXES))) $(NIO_TESTS) $(wildcard webapps/*) tools/mkinitrd.py
+	@mkdir -p $(BUILD)/web
+	python3 tools/mkinitrd.py $@ bin/hello=$(BUILD)/user/hello $(foreach p,$(WEB_LINUX),bin/$(p)=$(BUILD)/linux/$(p)) bin/busybox=$(BUILD)/linux/busybox bin/nio=$(BUILD)/linux/nio bin/winrt=$(BUILD)/linux/winrt bin/neosctl=$(BUILD)/linux/neosctl $(foreach f,$(USERLAND),lib/neos/pkg/$(notdir $(f))=$(f)) $(foreach w,$(WIN_EXES),bin/$(w).exe=$(BUILD)/win/$(w).exe) $(foreach f,$(NIO_TESTS),lib/nio/tests/$(notdir $(f))=$(f)) $(foreach f,$(wildcard webapps/*),www/$(notdir $(f))=$(f)) etc/motd=README.md
+$(BUILD)/embedded_initrd.o: $(BUILD)/web/embedded_initrd
+	cd $(BUILD)/web && ld -r -b binary -o ../embedded_initrd.o embedded_initrd
+$(BUILD)/neos-web.elf: $(OBJS) $(BUILD)/embedded_initrd.o kernel/linker.ld
+	$(LD) $(LDFLAGS) $(OBJS) $(BUILD)/embedded_initrd.o -o $(BUILD)/neos-web64.elf
+	objcopy -O elf32-i386 $(BUILD)/neos-web64.elf $@
+web: $(BUILD)/neos-web.elf
+
 $(BUILD):
 	mkdir -p $@
 
@@ -194,4 +206,5 @@ agenttest: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run gui iso run-iso test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest pkgtest hiltest serialtest fbtest disktest clean
+# (web: see above)
+.PHONY: web all run gui iso run-iso test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest pkgtest hiltest serialtest fbtest disktest clean
