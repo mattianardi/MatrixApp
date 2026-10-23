@@ -18,3 +18,5 @@ long   sock_shutdown(struct sock *s, int how);
 void   sock_names(struct sock *s, u32 *lip, u16 *lport, u32 *rip, u16 *rport);
 int    sock_is_stream(struct sock *s);
 int    sock_nread(struct sock *s);
+void   sock_set_unix(struct sock *s, int v);                          /* AF_UNIX sockets ride on loopback ports (see linux.c) */
+int    sock_is_unix(struct sock *s);

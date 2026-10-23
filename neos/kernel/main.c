@@ -10,7 +10,7 @@
 #include "vfs.h"
 
 static struct tunable *t_test;
-static u32 boot_mods[4][2];          /* copied before any allocation: QEMU puts the multiboot structures in memory we would reuse */
+static u32 boot_mods[8][2];          /* copied before any allocation: QEMU puts the multiboot structures in memory we would reuse */
 static int boot_nmods;
 
 static void fmt_cpu(char *b, size_t n)  { ksnprintf(b, n, "%s%s", cpu_brand(), cpu_invariant_tsc() ? "  (invariant TSC)" : ""); }
@@ -80,6 +80,7 @@ static void install_applets(void)
         char p[64]; ksnprintf(p, sizeof p, "/bin/%s", applets[i]);
         if (!vfs_lookup(p) && !vfs_symlink("busybox", p)) n++;
     }
+    vfs_mkdir("/dev/shm", 01777); vfs_mkdir("/run", 0755); vfs_mkdir("/var/tmp", 01777);
     vfs_mkdir("/usr/bin", 0755);                                           /* #!/usr/bin/env python3 and friends */
     if (!vfs_lookup("/usr/bin/env")) vfs_symlink("/bin/busybox", "/usr/bin/env");
     vfs_mkdir("/opt/bin", 0755); vfs_mkdir("/var/cache/pkg", 0755); vfs_mkdir("/var/pkg", 0755);
@@ -126,7 +127,7 @@ void kmain(u32 magic, u64 mbi_phys)
     const u32 *mb = mbi;
     if (mb[0] & (1 << 3)) {
         const u32 *mods = P2V(mb[6]);
-        for (u32 i = 0; i < mb[5] && i < 4; i++) { boot_mods[boot_nmods][0] = mods[i * 4]; boot_mods[boot_nmods][1] = mods[i * 4 + 1]; boot_nmods++; }
+        for (u32 i = 0; i < mb[5] && i < 8; i++) { boot_mods[boot_nmods][0] = mods[i * 4]; boot_mods[boot_nmods][1] = mods[i * 4 + 1]; boot_nmods++; }
     }
     if (mb[0] & (1 << 2)) tune_bootargs((const char *)P2V(mb[4]));      /* kernel command line */
     module_register("kernel", NEOS_VERSION, "boot, interrupts, API");

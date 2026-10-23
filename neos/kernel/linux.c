@@ -104,7 +104,7 @@ static long do_open(struct proc *p, char *abs, int flags, u32 mode)
     if ((flags & O_DIRECTORY) && !dir) return -E_NOTDIR;
     struct file *f = file_new(dir ? FT_DIR : i->dev == DEV_TTY ? FT_TTY : FT_INODE, flags);
     if (!f) return -E_NOMEM;
-    f->ino = i;
+    f->ino = i; inode_ref(i);
     if ((flags & O_TRUNC) && (flags & O_ACCMODE) && !dir && !i->dev) inode_truncate(i, 0);
     int fd = fdt_install(p->fds, f, 0, (flags & O_CLOEXEC) != 0);
     if (fd < 0) file_put(f);
@@ -207,6 +207,12 @@ static long sys_mmap(struct proc *p, u64 addr, u64 len, int prot, int flags, lon
         if (!va) return -E_NOMEM;
         if (!addr) p->mmap_next = va + plen;
     }
+    if (flags & MAP_SHARED) {                                           /* shared with every other mapper of the file (or anonymous, inherited by fork) */
+        struct shm *sh = shm_get(ino, ((ino ? off : 0) + plen) >> 12);
+        if (!sh) return -E_NOMEM;
+        if (vma_add_shm(&p->as, va, va + plen, prot, ino ? off : 0, sh)) return -E_NOMEM;
+        return (long)va;
+    }
     if (vma_add(&p->as, va, va + plen, prot, ino, off)) return -E_NOMEM;
     return (long)va;
 }
@@ -231,7 +237,12 @@ static long sys_brk(struct proc *p, u64 nb)
 
 /* ------------------------------------------------------------ futex */
 static u8 fkeys[512];
-static void *fkey(struct proc *p, u64 addr) { return &fkeys[((p->as.pml4 >> 12) * 31 + (addr >> 2)) & 511]; }
+static void *fkey(struct proc *p, u64 addr)
+{
+    struct vma *v = vma_find(&p->as, addr);
+    if (v && v->shm) return &fkeys[shm_key(v, addr) & 511];             /* shared word: the same key in every process that maps it */
+    return &fkeys[((p->as.pml4 >> 12) * 31 + (addr >> 2)) & 511];
+}
 
 void futex_wake_addr(struct proc *p, u64 addr, int n) { wake_on(fkey(p, addr), n); }
 
@@ -269,7 +280,44 @@ static long sys_futex(struct proc *p, u64 uaddr, int op, u32 val, u64 utime, u64
         extern int requeue_on(void *from, void *to, int max);
         return woken + requeue_on(fkey(p, uaddr), fkey(p, uaddr2), (int)utime);
     }
-    case 5: return -E_NOSYS;
+    case 5: {                                                      /* WAKE_OP */
+        u32 enc = val3, v2; int op = (enc >> 28) & 7, cmp = (enc >> 24) & 15; u32 oa = (enc >> 12) & 0xFFF, ca = enc & 0xFFF;
+        if (enc & 0x80000000u) oa = 1u << oa;
+        if (copy_from_user(&p->as, &v2, uaddr2, 4)) return -E_FAULT;
+        u32 nv = op == 0 ? oa : op == 1 ? v2 + oa : op == 2 ? v2 | oa : op == 3 ? v2 & ~oa : v2 ^ oa;
+        if (copy_to_user(&p->as, uaddr2, &nv, 4)) return -E_FAULT;
+        int woken = wake_on(fkey(p, uaddr), (int)val);
+        int hit = cmp == 0 ? v2 == ca : cmp == 1 ? v2 != ca : cmp == 2 ? v2 < ca : cmp == 3 ? v2 <= ca : cmp == 4 ? v2 > ca : v2 >= ca;
+        if (hit) woken += wake_on(fkey(p, uaddr2), (int)utime);
+        return woken;
+    }
+    case 6: case 7: case 8: {                                      /* LOCK_PI / UNLOCK_PI / TRYLOCK_PI (owner = user thread id; no priority boosting yet) */
+        if (!user_range_ok(&p->as, uaddr, 4, 1)) return -E_FAULT;
+        u32 tid = (u32)uctx_current()->utid; void *key = fkey(p, uaddr);
+        u64 deadline = ~0ull;
+        if (cmd == 7) {
+            u64 fl = irq_save(); u32 cur;
+            if (vm_read32_nofault(&p->as, uaddr, &cur)) { irq_restore(fl); return -E_FAULT; }
+            if ((cur & 0x3FFFFFFF) != tid) { irq_restore(fl); return -1; }       /* EPERM */
+            u32 z = 0; vm_write(&p->as, uaddr, &z, 4); irq_restore(fl);
+            wake_on(key, 1); return 0;
+        }
+        if (cmd == 6 && utime) { deadline = ts_to_deadline(p, utime, 1); if (!deadline) return -E_FAULT; }
+        int waited = 0;
+        for (;;) {
+            u64 fl = irq_save(); u32 cur;
+            if (vm_read32_nofault(&p->as, uaddr, &cur)) { irq_restore(fl); return -E_FAULT; }
+            if (cur == 0 || ((cur & 0x3FFFFFFF) == 0)) { u32 nv = tid | (waited ? 0x80000000u : 0); vm_write(&p->as, uaddr, &nv, 4); irq_restore(fl); return 0; }
+            if ((cur & 0x3FFFFFFF) == tid) { irq_restore(fl); return -35; }      /* EDEADLK */
+            if (cmd == 8) { irq_restore(fl); return -E_AGAIN; }
+            u32 nv = cur | 0x80000000u; vm_write(&p->as, uaddr, &nv, 4);
+            waited = 1;
+            sleep_on_locked(key, deadline);
+            irq_restore(fl);
+            if (deadline != ~0ull && ticks >= deadline) return -E_TIMEDOUT;
+            if (sig_interrupted(p)) return -E_INTR;
+        }
+    }
     }
     return -E_NOSYS;
 }
@@ -407,12 +455,56 @@ static struct sock *fd_sock(struct proc *p, int fd, struct file **fo)
     return f->sock;
 }
 
+/* AF_UNIX is carried over IPv4 loopback: a path (or abstract name) maps to a private loopback port, and bind() leaves an empty file behind */
+#define UNIX_MAX 64
+static struct { char path[110]; u16 port; } unix_tab[UNIX_MAX];
+static u16 unix_next = 20000;
+static int unix_name(struct proc *p, u64 ua, u64 len, char *out, int abstract_ok)
+{
+    char raw[110]; memset(raw, 0, sizeof raw);
+    if (len <= 2) return -E_INVAL;
+    u64 n = len - 2 < 108 ? len - 2 : 108;
+    if (copy_from_user(&p->as, raw, ua + 2, n)) return -E_FAULT;
+    if (!raw[0]) {                                                      /* abstract: "@name" */
+        if (!abstract_ok || n < 2) return -E_INVAL;
+        out[0] = '@'; memcpy(out + 1, raw + 1, n - 1); out[n] = 0; return 1;
+    }
+    char abs[256]; long r = get_path(p, ua + 2, abs, sizeof abs); if (r) return (int)r;
+    strlcpy(out, abs, 110); return 0;
+}
+static long unix_lookup(struct proc *p, u64 ua, u64 len, u16 *port)
+{
+    char nm[110]; int r = unix_name(p, ua, len, nm, 1); if (r < 0) return r;
+    for (int i = 0; i < UNIX_MAX; i++) if (unix_tab[i].port && !strcmp(unix_tab[i].path, nm)) {
+        if (nm[0] != '@' && !vfs_lookup(nm)) { unix_tab[i].port = 0; break; }          /* the socket file was removed */
+        *port = unix_tab[i].port; return 0;
+    }
+    return nm[0] == '@' ? -111 : -2;                                    /* ECONNREFUSED / ENOENT */
+}
+static long unix_bind(struct proc *p, struct sock *sk, u64 ua, u64 len)
+{
+    char nm[110]; int r = unix_name(p, ua, len, nm, 1); if (r < 0) return r;
+    int slot = -1;
+    for (int i = 0; i < UNIX_MAX; i++) {
+        if (unix_tab[i].port && !strcmp(unix_tab[i].path, nm)) { if (nm[0] == '@' || vfs_lookup(nm)) return -98; slot = i; break; }
+        if (!unix_tab[i].port && slot < 0) slot = i;
+    }
+    if (slot < 0) return -E_NOMEM;
+    u16 port = unix_next++; if (unix_next >= 30000) unix_next = 20000;
+    long e = sock_bind(sk, 0x7F000001, port); if (e) return e;
+    if (nm[0] != '@' && fs_write(nm, "", 0)) return -E_NOMEM;
+    strlcpy(unix_tab[slot].path, nm, sizeof unix_tab[slot].path); unix_tab[slot].port = port;
+    return 0;
+}
 static long get_sockaddr(struct proc *p, u64 ua, u64 len, u32 *ip, u16 *port)
 {
     u8 sa[16];
+    if (len < 2) return -E_INVAL;
+    if (copy_from_user(&p->as, sa, ua, 2)) return -E_FAULT;
+    if (*(u16 *)sa == 1) { *ip = 0x7F000001; return unix_lookup(p, ua, len, port); }
     if (len < 8) return -E_INVAL;
     if (copy_from_user(&p->as, sa, ua, 16 < len ? 16 : len)) return -E_FAULT;
-    if (*(u16 *)sa != 2) return -97;                                    /* EAFNOSUPPORT: IPv4 only */
+    if (*(u16 *)sa != 2) return -97;                                    /* EAFNOSUPPORT: IPv4 and AF_UNIX only */
     *port = (u16)(sa[2] << 8 | sa[3]); *ip = (u32)sa[4] << 24 | (u32)sa[5] << 16 | (u32)sa[6] << 8 | sa[7];
     return 0;
 }
@@ -424,6 +516,22 @@ static long put_sockaddr(struct proc *p, u64 ua, u64 ulen, u32 ip, u16 port)
     u32 have = 0; if (copy_from_user(&p->as, &have, ulen, 4)) return -E_FAULT;
     if (copy_to_user(&p->as, ua, sa, have < 16 ? have : 16)) return -E_FAULT;
     u32 n = 16; return copy_to_user(&p->as, ulen, &n, 4) ? -E_FAULT : 0;
+}
+
+/* sockaddr out for a socket: AF_UNIX sockets report their path (or an unnamed address), the rest sockaddr_in */
+static long put_name(struct proc *p, struct sock *sk, u64 ua, u64 ulen, u32 ip, u16 port, int peer)
+{
+    if (!sk || !sock_is_unix(sk)) return put_sockaddr(p, ua, ulen, ip, port);
+    if (!ua || !ulen) return 0;
+    u8 sa[112]; memset(sa, 0, sizeof sa); *(u16 *)sa = 1; u32 n = 2;
+    if (!peer || port) for (int i = 0; i < UNIX_MAX; i++) if (unix_tab[i].port == port && port) {
+        const char *s = unix_tab[i].path; u32 l = (u32)strlen(s);
+        if (s[0] == '@') { memcpy(sa + 3, s + 1, l - 1); n = 2 + l; } else { memcpy(sa + 2, s, l + 1); n = 2 + l + 1; }
+        break;
+    }
+    u32 have = 0; if (copy_from_user(&p->as, &have, ulen, 4)) return -E_FAULT;
+    if (copy_to_user(&p->as, ua, sa, have < n ? have : n)) return -E_FAULT;
+    return copy_to_user(&p->as, ulen, &n, 4) ? -E_FAULT : 0;
 }
 
 static long new_sock_fd(struct proc *p, struct sock *s, int flags)
@@ -439,10 +547,12 @@ static long new_sock_fd(struct proc *p, struct sock *s, int flags)
 static long sys_socket(struct proc *p, int domain, int type, int proto)
 {
     (void)proto;
-    if (domain != 2) return -97;                                        /* AF_INET only (AF_UNIX / AF_INET6: EAFNOSUPPORT, callers fall back) */
+    if (domain != 2 && domain != 1) return -97;                         /* AF_INET and AF_UNIX (AF_INET6 / netlink / packet: EAFNOSUPPORT, callers fall back) */
     int t = type & 0xF;
+    if (t == 5) t = 1;                                                  /* SOCK_SEQPACKET: carried as a stream */
     if (t != 1 && t != 2) return -94;                                   /* ESOCKTNOSUPPORT */
     struct sock *s = sock_new(t == 1 ? SOCK_STREAM_ : SOCK_DGRAM_);
+    if (s && domain == 1) sock_set_unix(s, 1);
     return s ? new_sock_fd(p, s, type) : -E_NOMEM;
 }
 
@@ -475,7 +585,7 @@ static long sys_recvfrom(struct proc *p, int fd, u64 ubuf, u64 len, int flags, u
     long r = sock_recv(s, b, c, (f->flags & O_NONBLOCK) || (flags & MSG_DONTWAIT_), &sip, &sport);
     if (r > 0 && copy_to_user(&p->as, ubuf, b, (size_t)r)) r = -E_FAULT;
     kfree(b);
-    if (r >= 0 && uaddr) { long e = put_sockaddr(p, uaddr, ualen, sip, sport); if (e) return e; }
+    if (r >= 0 && uaddr) { long e = put_name(p, s, uaddr, ualen, sip, sport, 1); if (e) return e; }
     return r;
 }
 
@@ -644,13 +754,15 @@ static struct frame *linux_syscall_impl(struct frame *f)
     }
     case 41: RET(sys_socket(p, (int)a0, (int)a1, (int)a2));
     case 42: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 ip; u16 pt; if ((r = get_sockaddr(p, a1, a2, &ip, &pt))) RET(r); RET(sock_connect(sk, ip, pt)); }
-    case 49: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 ip; u16 pt; if ((r = get_sockaddr(p, a1, a2, &ip, &pt))) RET(r); RET(sock_bind(sk, ip, pt)); }
+    case 49: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF);
+        { u16 fam = 0; if (a2 >= 2 && !copy_from_user(&p->as, &fam, a1, 2) && fam == 1) RET(unix_bind(p, sk, a1, a2)); } u32 ip; u16 pt; if ((r = get_sockaddr(p, a1, a2, &ip, &pt))) RET(r); RET(sock_bind(sk, ip, pt)); }
     case 50: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); RET(sock_listen(sk, (int)a1)); }
     case 43: case 288: {
         struct file *lf; struct sock *sk = fd_sock(p, (int)a0, &lf); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF);
         struct sock *ns; r = sock_accept(sk, (lf->flags & O_NONBLOCK) != 0, &ns); if (r) RET(r);
         u32 lip, rip; u16 lp, rp; sock_names(ns, &lip, &lp, &rip, &rp);
-        if (a1 && (r = put_sockaddr(p, a1, a2, rip, rp))) { sock_free(ns); RET(r); }
+        if (sock_is_unix(sk)) sock_set_unix(ns, 1);
+        if (a1 && (r = put_name(p, ns, a1, a2, rip, rp, 1))) { sock_free(ns); RET(r); }
         RET(new_sock_fd(p, ns, nr == 288 ? (int)a3 : 0));
     }
     case 44: RET(sys_sendto(p, (int)a0, a1, a2, (int)a3, a4, a5));
@@ -660,10 +772,24 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 307: { long done = 0; for (u64 i = 0; i < a2; i++) { long q = sys_sendmsg(p, (int)a0, a1 + i * 64, (int)a3); if (q < 0) { if (!done) RET(q); break; } copy_to_user(&p->as, a1 + i * 64 + 56, &q, 4); done++; } RET(done); }
     case 299: { long q = sys_recvmsg(p, (int)a0, a1, (int)a3 | MSG_DONTWAIT_ * 0); if (q < 0) RET(q); copy_to_user(&p->as, a1 + 56, &q, 4); RET(1); }
     case 48: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); RET(sock_shutdown(sk, (int)a1)); }
-    case 51: case 52: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 lip, rip; u16 lp, rp; sock_names(sk, &lip, &lp, &rip, &rp); if (nr == 52 && !rp) RET(-107); RET(nr == 51 ? put_sockaddr(p, a1, a2, lip, lp) : put_sockaddr(p, a1, a2, rip, rp)); }
+    case 51: case 52: { struct sock *sk = fd_sock(p, (int)a0, NULL); if (!sk) RET(fdt_get(p->fds, (int)a0) ? -88 : -E_BADF); u32 lip, rip; u16 lp, rp; sock_names(sk, &lip, &lp, &rip, &rp); if (nr == 52 && !rp) RET(-107); RET(nr == 51 ? put_name(p, sk, a1, a2, lip, lp, 0) : put_name(p, sk, a1, a2, rip, rp, 1)); }
     case 54: RET(sys_sockopt(p, (int)a0, (int)a1, (int)a2, a3, a4, 0));
     case 55: RET(sys_sockopt(p, (int)a0, (int)a1, (int)a2, a3, a4, 1));
-    case 53: RET(-97);                                                    /* socketpair: AF_UNIX is not supported */
+    case 53: {                                                            /* socketpair(AF_UNIX): a connected loopback pair */
+        if (a0 != 1) RET(-97);
+        struct sock *ls = sock_new(SOCK_STREAM_), *cs = sock_new(SOCK_STREAM_), *as = NULL;
+        if (!ls || !cs) { if (ls) sock_free(ls); if (cs) sock_free(cs); RET(-E_NOMEM); }
+        u16 port = unix_next++; if (unix_next >= 30000) unix_next = 20000;
+        if ((r = sock_bind(ls, 0x7F000001, port)) || (r = sock_listen(ls, 1)) || (r = sock_connect(cs, 0x7F000001, port)) || (r = sock_accept(ls, 0, &as))) {
+            sock_free(ls); sock_free(cs); RET(r);
+        }
+        sock_free(ls); sock_set_unix(cs, 1); sock_set_unix(as, 1);
+        long fa = new_sock_fd(p, cs, (int)a1); if (fa < 0) { sock_free(as); RET(fa); }
+        long fb = new_sock_fd(p, as, (int)a1); if (fb < 0) { fdt_close(p->fds, (int)fa); RET(fb); }
+        int sv[2] = { (int)fa, (int)fb };
+        if (copy_to_user(&p->as, a3, sv, sizeof sv)) RET(-E_FAULT);
+        RET(0);
+    }
     case 213: case 291: { struct file *ef = file_new(FT_EPOLL, 2); if (!ef) RET(-E_NOMEM); ef->ep = kmalloc(1024); if (!ef->ep) { kfree(ef); RET(-E_NOMEM); } memset(ef->ep, 0, 1024); r = fdt_install(p->fds, ef, 0, nr == 291 && (a0 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }
     case 233: { struct file *ef = fdt_get(p->fds, (int)a0); if (!ef || ef->type != FT_EPOLL) RET(-E_BADF); struct epoll_ev ev = { 0, 0 }; if (a1 != 2 && copy_from_user(&p->as, &ev, a3, sizeof ev)) RET(-E_FAULT); RET(epoll_ctl_op(ef, p->fds, (int)a1, (int)a2, ev.events, ev.data)); }
     case 232: case 281: RET(sys_epoll_wait(p, (int)a0, a1, (int)a2, (int)a3));
@@ -675,6 +801,15 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 11: RET(vm_munmap(&p->as, a0, a1) ? -E_INVAL : 0);
     case 12: RET(sys_brk(p, a0));
     case 25: RET(-E_NOMEM);                                               /* mremap: callers fall back to mmap+copy */
+    case 137: case 138: {                                                 /* statfs / fstatfs: a memory-backed filesystem */
+        if (nr == 137) { if ((r = get_path(p, a0, abs, sizeof abs))) RET(r); if (!vfs_lookup(abs)) RET(-E_NOENT); }
+        else if (!fdt_get(p->fds, (int)a0)) RET(-E_BADF);
+        u64 sf[15]; memset(sf, 0, sizeof sf);
+        sf[0] = 0x01021994; sf[1] = 4096; sf[2] = pmm_total_pages(); sf[3] = pmm_free_pages(); sf[4] = pmm_free_pages();
+        sf[5] = 8192; sf[6] = 4096; sf[8] = 255; sf[9] = 4096;
+        RET(copy_to_user(&p->as, nr == 137 ? a1 : a1, sf, sizeof sf) ? -E_FAULT : 0);
+    }
+    case 26: { struct vma *v = vma_find(&p->as, a0); if (v && v->shm) shm_sync(v->shm); RET(0); }   /* msync: write a shared file mapping back */
     case 28: case 149: case 150: case 27: RET(0);                         /* madvise, mlock, munlock, mincore */
     case 13: {                                                            /* rt_sigaction */
         if (a0 < 1 || a0 > 64 || a0 == 9 || a0 == 19) RET(-E_INVAL);
@@ -828,6 +963,36 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 202: RET(sys_futex(p, a0, (int)a1, (u32)a2, a3, a4, (u32)a5));
     case 204: { u64 m = 1; if (a2 && a1 >= 8 && copy_to_user(&p->as, a2, &m, 8)) RET(-E_FAULT); RET(8); }
     case 203: RET(0);
+    case 142: case 144: {                                                 /* sched_setparam / sched_setscheduler: SCHED_FIFO / SCHED_RR priorities 1..99 map onto kernel priorities 1..3, above ordinary processes (4) */
+        if (a0 && (int)a0 != p->pid) RET(-3);
+        int pol = nr == 144 ? (int)a1 : 1; u64 pa = nr == 144 ? a2 : a1; int lp = 0;
+        if (copy_from_user(&p->as, &lp, pa, 4)) RET(-E_FAULT);
+        int kp;
+        if (pol == 1 || pol == 2) { if (lp < 1 || lp > 99) RET(-E_INVAL); kp = lp >= 67 ? 1 : lp >= 34 ? 2 : 3; }
+        else if (pol == 0 || pol == 3) { if (lp) RET(-E_INVAL); kp = 4; }
+        else if (pol == 5) kp = 6;
+        else RET(-E_INVAL);
+        RET(thread_set_prio(thread_current_id(), kp) ? -E_INVAL : 0);
+    }
+    case 143: case 145: {
+        if (a0 && (int)a0 != p->pid) RET(-3);
+        int kp = thread_prio_of(thread_current_id());
+        if (nr == 145) RET(kp >= 1 && kp <= 3 ? 1 : kp > 4 ? 5 : 0);
+        int lp = kp == 1 ? 99 : kp == 2 ? 66 : kp == 3 ? 33 : 0;
+        RET(copy_to_user(&p->as, a1, &lp, 4) ? -E_FAULT : 0);
+    }
+    case 146: RET(a0 == 1 || a0 == 2 ? 99 : 0);
+    case 147: RET(a0 == 1 || a0 == 2 ? 1 : 0);
+    case 148: { u64 ts[2] = { 0, 10000000 }; RET(a1 && copy_to_user(&p->as, a1, ts, 16) ? -E_FAULT : 0); }
+    case 151: case 152: case 325: RET(0);                                 /* mlockall / munlockall / mlock2: memory is never paged out, so it is always locked */
+    case 86: case 265: {                                                  /* link / linkat: a copy (NeoFS has no hard links) */
+        if (nr == 86) { if ((r = get_path(p, a0, abs, sizeof abs)) || (r = get_path(p, a1, abs2, sizeof abs2))) RET(r); }
+        else if ((r = path_at(p, (long)a0, a1, abs, sizeof abs)) || (r = path_at(p, (long)a2, a3, abs2, sizeof abs2))) RET(r);
+        const u8 *ld; size_t ln;
+        if (vfs_lookup(abs2)) RET(-17);
+        if (fs_read(abs, &ld, &ln)) RET(-E_NOENT);
+        RET(fs_write(abs2, ld, ln) ? -E_NOMEM : 0);
+    }
     case 200: case 234: { int sg = (int)(nr == 200 ? a1 : a2); if (sg == 23 || sg == 0) RET(0); RET(proc_signal(p->pid, sg)); }   /* tkill/tgkill: delivered to the process (SIGURG, Go's preemption nudge, is dropped) */
     case 62: {
         long pid = (long)a0;

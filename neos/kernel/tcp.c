@@ -136,6 +136,10 @@ void tcp_close(struct tcp_conn *c)
             if ((int)(c->snd_nxt - c->snd_una) <= 0) break;
         }
     }
+    else if (c->state == S_EST && !c->rst) {                            /* FIN already sent by shutdown(SHUT_WR): still wait for the peer to acknowledge it, or it sees a reset */
+        u64 until = ticks + ms_to_ticks(300);
+        while (ticks < until && (int)(c->snd_nxt - c->snd_una) > 0) thread_sleep_until(ticks + 1);
+    }
     c->state = S_FREE;
 }
 

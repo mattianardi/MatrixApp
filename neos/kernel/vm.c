@@ -4,6 +4,7 @@
 #define P_PRESENT 1ull
 #define P_WRITE   2ull
 #define P_USER    4ull
+#define P_SHARED  (1ull << 9)                    /* software bit: frame belongs to a struct shm, never freed with the page table */
 #define P_NX      (1ull << 63)
 #define ADDR_MASK 0x000FFFFFFFFFF000ull
 
@@ -64,15 +65,70 @@ static void free_level(u64 phys, int level)           /* level 1 = page table (l
     u64 *t = tbl(phys);
     for (int i = 0; i < 512; i++) {
         if (!(t[i] & P_PRESENT)) continue;
-        if (level == 1) pmm_free(t[i] & ADDR_MASK, 1);
+        if (level == 1) { if (!(t[i] & P_SHARED)) pmm_free(t[i] & ADDR_MASK, 1); }
         else free_level(t[i] & ADDR_MASK, level - 1);
     }
     pmm_free(phys, 1);
 }
 
+/* ------------------------------------------------------------ shared memory objects */
+struct shm { int refs; struct inode *ino; u64 npages; u64 *pg; };
+#define SHM_MAX 128
+static struct shm *shm_reg[SHM_MAX];
+
+struct shm *shm_get(struct inode *ino, u64 npages)
+{
+    u64 fl = irq_save();
+    int slot = -1;
+    for (int i = 0; i < SHM_MAX; i++) {
+        if (shm_reg[i] && ino && shm_reg[i]->ino == ino) { slot = i; break; }
+        if (!shm_reg[i] && slot < 0) slot = i;
+    }
+    irq_restore(fl);
+    if (slot < 0) return NULL;
+    struct shm *s = shm_reg[slot];
+    if (s && ino && s->ino == ino) {
+        if (npages > s->npages) {
+            u64 *np = kmalloc(npages * 8); if (!np) return NULL;
+            memset(np, 0, npages * 8); memcpy(np, s->pg, s->npages * 8);
+            u64 *old = s->pg; s->pg = np; s->npages = npages; kfree(old);
+        }
+        s->refs++; return s;
+    }
+    s = kmalloc(sizeof *s); if (!s) return NULL;
+    s->pg = kmalloc(npages * 8); if (!s->pg) { kfree(s); return NULL; }
+    memset(s->pg, 0, npages * 8); s->refs = 1; s->ino = ino; s->npages = npages; if (ino) inode_ref(ino);
+    fl = irq_save(); shm_reg[slot] = s; irq_restore(fl);
+    return s;
+}
+
+void shm_sync(struct shm *s)
+{
+    if (!s->ino) return;
+    for (u64 i = 0; i < s->npages; i++) {
+        if (!s->pg[i] || i * 4096 >= s->ino->size) continue;
+        u64 left = s->ino->size - i * 4096;
+        inode_write(s->ino, i * 4096, tbl(s->pg[i]), left < 4096 ? left : 4096);
+    }
+}
+
+static void shm_release(struct shm *s)
+{
+    shm_sync(s);
+    if (--s->refs > 0) return;
+    for (int i = 0; i < SHM_MAX; i++) if (shm_reg[i] == s) shm_reg[i] = NULL;
+    for (u64 i = 0; i < s->npages; i++) if (s->pg[i]) pmm_free(s->pg[i], 1);
+    if (s->ino) inode_unref(s->ino);
+    kfree(s->pg); kfree(s);
+}
+
+u64 shm_key(const struct vma *v, u64 addr) { return ((u64)(uintptr_t)v->shm >> 4) * 1315423911u + ((v->off + addr - v->start) >> 2); }
+
 void vm_free(struct aspace *as)
 {
     if (!as->pml4) return;
+    for (int i = 0; i < as->nvma; i++) if (as->vma[i].shm) shm_release(as->vma[i].shm);
+    as->nvma = 0;
     u64 *p = tbl(as->pml4);
     for (int i = 0; i < 256; i++) if (p[i] & P_PRESENT) free_level(p[i] & ADDR_MASK, 3);
     pmm_free(as->pml4, 1);
@@ -186,7 +242,14 @@ struct vma *vma_find(struct aspace *as, u64 addr)
 int vma_add(struct aspace *as, u64 start, u64 end, int prot, struct inode *ino, u64 off)
 {
     if (as->nvma == MAX_VMAS) return -1;
-    as->vma[as->nvma++] = (struct vma){ start, end, (u8)prot, ino, off };
+    as->vma[as->nvma++] = (struct vma){ start, end, (u8)prot, ino, off, NULL };
+    return 0;
+}
+
+int vma_add_shm(struct aspace *as, u64 start, u64 end, int prot, u64 off, struct shm *shm)
+{
+    if (as->nvma == MAX_VMAS) { shm_release(shm); return -1; }
+    as->vma[as->nvma++] = (struct vma){ start, end, (u8)prot, NULL, off, shm };
     return 0;
 }
 
@@ -195,13 +258,13 @@ static void vma_remove_range(struct aspace *as, u64 s, u64 e)       /* trims / s
     for (int i = 0; i < as->nvma; i++) {
         struct vma v = as->vma[i];
         if (v.end <= s || v.start >= e) continue;
-        if (v.start >= s && v.end <= e) { as->vma[i--] = as->vma[--as->nvma]; continue; }
+        if (v.start >= s && v.end <= e) { as->vma[i--] = as->vma[--as->nvma]; if (v.shm) shm_release(v.shm); continue; }
         if (v.start < s && v.end > e) {                                 /* hole in the middle: split */
             as->vma[i].end = s;
-            struct vma hi = v; hi.start = e; if (hi.ino) hi.off += e - v.start;
-            vma_add(as, hi.start, hi.end, hi.prot, hi.ino, hi.off);
+            struct vma hi = v; hi.start = e; if (hi.ino || hi.shm) hi.off += e - v.start;
+            if (as->nvma < MAX_VMAS) { as->vma[as->nvma++] = hi; if (hi.shm) hi.shm->refs++; }
         } else if (v.start < s) as->vma[i].end = s;
-        else { if (v.ino) as->vma[i].off += e - v.start; as->vma[i].start = e; }
+        else { if (v.ino || v.shm) as->vma[i].off += e - v.start; as->vma[i].start = e; }
     }
 }
 
@@ -213,9 +276,9 @@ int vm_munmap(struct aspace *as, u64 start, u64 len)
     for (u64 va = start; va < end; va += 4096) {
         u64 *pte = pte_of(as, va, 0);
         if (pte && (*pte & P_PRESENT)) {
-            u64 fr = *pte & ADDR_MASK; *pte = 0; as->pages--;
+            u64 fr = *pte & ADDR_MASK; int shared_pte = (*pte & P_SHARED) != 0; *pte = 0; as->pages--;
             __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
-            pmm_free(fr, 1);
+            if (!shared_pte) pmm_free(fr, 1);
             __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
         }
     }
@@ -235,10 +298,11 @@ int vm_mprotect(struct aspace *as, u64 start, u64 len, int prot)
         struct vma v = as->vma[i];
         if (v.end <= start || v.start >= end) continue;
         u64 s = v.start > start ? v.start : start, e = v.end < end ? v.end : end;
-        tmp[nt++] = (struct vma){ s, e, (u8)prot, v.ino, v.off + (v.ino ? s - v.start : 0) };
+        tmp[nt++] = (struct vma){ s, e, (u8)prot, v.ino, v.off + (v.ino || v.shm ? s - v.start : 0), v.shm };
+        if (v.shm) v.shm->refs++;                                    /* held across the remove / re-add below */
     }
     vma_remove_range(as, start, end);
-    for (int i = 0; i < nt; i++) vma_add(as, tmp[i].start, tmp[i].end, prot, tmp[i].ino, tmp[i].off);
+    for (int i = 0; i < nt; i++) { if (as->nvma < MAX_VMAS) as->vma[as->nvma++] = tmp[i]; else if (tmp[i].shm) shm_release(tmp[i].shm); as->vma[as->nvma - 1].prot = (u8)prot; }
     for (u64 va = start; va < end; va += 4096) {
         u64 *pte = pte_of(as, va, 0);
         if (!pte || !(*pte & P_PRESENT)) continue;
@@ -265,6 +329,22 @@ int vm_fault(struct aspace *as, u64 addr, int write, int exec)
     if (!pte) { irq_restore(flg); return -1; }
     if (*pte & P_PRESENT) { irq_restore(flg); return -1; }             /* present: a protection fault, or another thread just mapped it */
     if (as->pages >= as->limit) { irq_restore(flg); return -1; }
+    if (v->shm) {                                                       /* shared page: the object owns the frame */
+        struct shm *sh = v->shm; u64 idx = (v->off + (addr - v->start)) >> 12;
+        if (idx >= sh->npages) { irq_restore(flg); return -1; }
+        if (!sh->pg[idx]) {
+            u64 nf = pmm_alloc(1);
+            if (!nf) { irq_restore(flg); return -1; }
+            memset(tbl(nf), 0, 4096);
+            if (sh->ino && idx * 4096 < sh->ino->size) inode_read(sh->ino, idx * 4096, tbl(nf), sh->ino->size - idx * 4096 < 4096 ? sh->ino->size - idx * 4096 : 4096);
+            sh->pg[idx] = nf;
+        }
+        *pte = sh->pg[idx] | P_PRESENT | P_USER | P_SHARED | ((v->prot & PROT_WRITE) ? P_WRITE : 0) | ((v->prot & PROT_EXEC) ? 0 : P_NX);
+        as->pages++;
+        __asm__ volatile("invlpg (%0)" :: "r"(addr) : "memory");
+        irq_restore(flg);
+        return 0;
+    }
     u64 f = pmm_alloc(1);
     if (!f) { irq_restore(flg); return -1; }
     u8 *pg = (u8 *)tbl(f);
@@ -296,7 +376,10 @@ static int clone_level(u64 dst_phys, u64 src_phys, int level, struct aspace *dst
     u64 *d = tbl(dst_phys), *s = tbl(src_phys);
     for (int i = 0; i < 512; i++) {
         if (!(s[i] & P_PRESENT)) continue;
-        if (level == 1) {
+        if (level == 1 && (s[i] & P_SHARED)) {                           /* shared mapping: both processes see the same frame */
+            if (dst->pages >= dst->limit) return -1;
+            d[i] = s[i]; dst->pages++;
+        } else if (level == 1) {
             u64 f = pmm_alloc(1);
             if (!f || dst->pages >= dst->limit) { if (f) pmm_free(f, 1); return -1; }
             memcpy(tbl(f), tbl(s[i] & ADDR_MASK), 4096);
@@ -324,6 +407,7 @@ int vm_clone(struct aspace *dst, const struct aspace *src)
     }
     dst->nvma = src->nvma;
     memcpy(dst->vma, src->vma, sizeof src->vma);
+    for (int i = 0; i < dst->nvma; i++) if (dst->vma[i].shm) dst->vma[i].shm->refs++;
     return 0;
 }
 

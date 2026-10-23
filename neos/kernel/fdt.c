@@ -36,6 +36,7 @@ void file_put(struct file *f)
     int last = --f->refs == 0;
     irq_restore(fl);
     if (!last) return;
+    if (f->ino && (f->type == FT_INODE || f->type == FT_DIR || f->type == FT_TTY)) inode_unref(f->ino);
     if (f->sock) sock_free(f->sock);
     if (f->ep) kfree(f->ep);
     if (f->pipe) {

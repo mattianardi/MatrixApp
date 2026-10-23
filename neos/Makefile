@@ -170,6 +170,9 @@ browsertest: all
 pkgtest: all
 	@python3 tools/check-pkg.py | tail -1
 
+hiltest: all
+	@python3 tools/check-hil.py | tail -1
+
 disktest: all
 	@tools/check-disk.sh
 
@@ -182,4 +185,4 @@ agenttest: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all run gui iso run-iso test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest pkgtest disktest clean
+.PHONY: all run gui iso run-iso test shelltest nettest usertest linuxtest wintest niotest aihtest agenttest guitest browsertest netappstest pkgtest hiltest disktest clean

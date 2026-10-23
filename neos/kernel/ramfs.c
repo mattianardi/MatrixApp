@@ -167,6 +167,7 @@ int vfs_readdir(const char *dir, int idx, char *name, size_t nn, int *type, u32 
 
 static void drop(struct inode *n)
 {
+    if (n->refs > 0) { h_remove((int)(n - nodes)); n->path[0] = 0; n->orphan = 1; return; }   /* still open or mapped: nameless until the last user is gone */
     total -= n->size;
     if (n->data) kfree(n->data);
     h_remove((int)(n - nodes));
@@ -219,6 +220,15 @@ int vfs_symlink(const char *target, const char *path)
     if (r) return r;
     strlcpy(i->link, target, sizeof i->link);
     return 0;
+}
+
+void inode_ref(struct inode *i) { i->refs++; }
+void inode_unref(struct inode *i)
+{
+    if (--i->refs > 0 || !i->orphan) return;
+    total -= i->size;
+    if (i->data) kfree(i->data);
+    i->used = 0; i->data = NULL; i->orphan = 0;
 }
 
 long inode_read(struct inode *i, u64 off, void *buf, size_t n)
@@ -317,12 +327,12 @@ int fs_remove_tree(const char *prefix)
     return n;
 }
 
-int fs_count(void) { int n = 0; for (int i = 0; i < MAXI; i++) n += nodes[i].used && (nodes[i].mode & S_IFMT) == S_IFREG && !nodes[i].dev; return n; }
+int fs_count(void) { int n = 0; for (int i = 0; i < MAXI; i++) n += nodes[i].used && !nodes[i].orphan && (nodes[i].mode & S_IFMT) == S_IFREG && !nodes[i].dev; return n; }
 
 int fs_info(int idx, char *path, size_t pn, size_t *size)
 {
     for (int i = 0, k = 0; i < MAXI; i++)
-        if (nodes[i].used && (nodes[i].mode & S_IFMT) == S_IFREG && !nodes[i].dev && k++ == idx) { strlcpy(path, nodes[i].path, pn); *size = nodes[i].size; return 0; }
+        if (nodes[i].used && !nodes[i].orphan && (nodes[i].mode & S_IFMT) == S_IFREG && !nodes[i].dev && k++ == idx) { strlcpy(path, nodes[i].path, pn); *size = nodes[i].size; return 0; }
     return -1;
 }
 
@@ -331,5 +341,5 @@ size_t fs_bytes(void) { return total; }
 /* every live inode except devices and synthetic /proc files, parents before children is NOT guaranteed (callers create parents on demand) */
 void vfs_walk(void (*cb)(struct inode *i, void *ctx), void *ctx)
 {
-    for (int i = 0; i < MAXI; i++) if (nodes[i].used && !nodes[i].dev && strncmp(nodes[i].path, "/proc", 5)) cb(&nodes[i], ctx);
+    for (int i = 0; i < MAXI; i++) if (nodes[i].used && !nodes[i].orphan && !nodes[i].dev && strncmp(nodes[i].path, "/proc", 5)) cb(&nodes[i], ctx);
 }

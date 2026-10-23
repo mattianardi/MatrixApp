@@ -45,6 +45,8 @@ struct inode {
     u64 mtime;               /* seconds since boot-relative epoch (see vfs_now) */
     int dev;
     char link[100];
+    int refs;                /* open files and shared mappings; an unlinked inode lives on until the last one lets go */
+    u8 orphan;
 };
 
 /* path helpers */
@@ -57,6 +59,8 @@ int  vfs_unlink(const char *path);                                   /* files an
 int  vfs_rmdir(const char *path);
 int  vfs_rename(const char *from, const char *to);
 int  vfs_symlink(const char *target, const char *path);
+void inode_ref(struct inode *i);
+void inode_unref(struct inode *i);
 long inode_read(struct inode *i, u64 off, void *buf, size_t n);
 long inode_write(struct inode *i, u64 off, const void *buf, size_t n);
 int  inode_truncate(struct inode *i, u64 len);

@@ -9,7 +9,7 @@ struct sock {
     int type;
     struct tcp_conn *tc; struct tcp_listener *ls;
     u32 lip, rip; u16 lport, rport;
-    u8 bound, connected, shut_rd, shut_wr;
+    u8 bound, connected, shut_rd, shut_wr, unix_;
     struct dgram *dq; volatile u32 dh, dt;
 };
 
@@ -48,6 +48,8 @@ static long ensure_udp_bound(struct sock *s)
     return -98;                                                        /* EADDRINUSE */
 }
 
+static u16 tcp_ephemeral_listen(void) { static u16 np = 30000; u16 p = np++; if (np >= 40000) np = 30000; return p; }
+
 long sock_bind(struct sock *s, u32 ip, u16 port)
 {
     if (s->bound) return -22;
@@ -57,6 +59,7 @@ long sock_bind(struct sock *s, u32 ip, u16 port)
         if (udp_bind_ctx(port, udp_rx, s)) return -98;
         s->lport = port; s->bound = 1; return 0;
     }
+    if (!port) port = tcp_ephemeral_listen();                           /* getsockname() after bind(port 0) must already show the port */
     s->lport = port; s->bound = 1;                                      /* TCP: remembered until listen() */
     return 0;
 }
@@ -65,7 +68,7 @@ long sock_listen(struct sock *s, int backlog)
 {
     (void)backlog;
     if (s->type != SOCK_STREAM_ || s->tc) return -95;
-    if (!s->bound || !s->lport) { static u16 np = 30000; s->lport = np++; s->bound = 1; }
+    if (!s->bound || !s->lport) { s->lport = tcp_ephemeral_listen(); s->bound = 1; }
     s->ls = tcp_listen(s->lport);
     return s->ls ? 0 : -98;
 }
@@ -162,6 +165,8 @@ long sock_shutdown(struct sock *s, int how)
 }
 
 void sock_names(struct sock *s, u32 *lip, u16 *lport, u32 *rip, u16 *rport) { *lip = s->lip ? s->lip : net_ip(); *lport = s->lport; *rip = s->rip; *rport = s->rport; }
+void sock_set_unix(struct sock *s, int v) { s->unix_ = (u8)v; }
+int  sock_is_unix(struct sock *s) { return s->unix_; }
 int sock_is_stream(struct sock *s) { return s->type == SOCK_STREAM_; }
 int sock_nread(struct sock *s)
 {
