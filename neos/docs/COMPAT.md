@@ -25,7 +25,7 @@ Il verdetto `BLOCKED` indica un requisito che NEOS non soddisfa; l'elenco mostra
 | Memoria condivisa tra processi | **funziona** | `MAP_SHARED` (file e anonima, ereditata da `fork`), `/dev/shm`, semafori POSIX, futex condivisi, `msync` |
 | Socket | **funziona** | IPv4 TCP/UDP, `AF_UNIX` (emulati su loopback, con file-segnaposto), `socketpair`, epoll |
 | Tempo reale per i processi Linux | **parziale** | `sched_setscheduler(SCHED_FIFO/RR)` mappa le priorità 1..99 sulle priorità RT del kernel (sopra i processi ordinari); `PTHREAD_PRIO_INHERIT` accettato (futex PI) ma **senza** inversione di priorità risolta; un solo core |
-| Porte seriali | **funziona** (QEMU) | `/dev/ttyS2`, `/dev/ttyS3` (UART 16550 COM3/COM4; COM1 è la console e COM2 il canale degli agenti), `/dev/ttyUSB0` (FTDI, CP210x), `/dev/ttyACM0` (CDC-ACM); `termios`/`termios2`, `select`, linee DTR/RTS. CH340 non supportato |
+| Porte seriali | **funziona** (QEMU, verificato con host reale su socket) | `/dev/ttyS2`, `/dev/ttyS3` (UART 16550 COM3/COM4; COM1 è la console e COM2 il canale degli agenti), `/dev/ttyUSB0` (FTDI: provato su QEMU; CP210x: scritto, **non provato**), `/dev/ttyACM0` (CDC-ACM: scritto, **non provato**, QEMU non lo emula); `termios`/`termios2`, `select`/`poll`, linee DTR/RTS. CH340 non supportato; nessun hub |
 | Windows: Win32 non grafico | **parziale** | file, thread, sincronizzazione (anche SRW/condvar/InitOnce), registro (`Reg*`, persistente in `C:\ProgramData\neos-registry`), Winsock, tempo, COM solo avvio (`CoCreateInstance` fallisce come classe non registrata) |
 | Windows: DLL reali | **funziona** | ricerca in cartella del programma, directory corrente, `C:\Windows\System32`, `C:\Windows`, `PATH`; nomi case-insensitive |
 | Windows: GUI (user32/gdi32), DirectX, servizi, WMI, .NET, PE a 32 bit | **non c'è** | blocca LabVIEW Run-Time Engine **desktop** con pannelli frontali; vedi sotto |
@@ -62,7 +62,7 @@ Blocchi tipici che lo scanner segnala:
 
 | Requisito dell'applicazione | Situazione |
 |---|---|
-| Qt/PySide/PyQt, Tk, wx, Kivy, pygame | **non c'è un server grafico**. Il percorso previsto è `/dev/fb0` + `/dev/input/event*` (Qt `linuxfb`): da fare |
+| Qt/PySide/PyQt, Tk, wx, Kivy, pygame | **non c'è un server X11/Wayland**. Ci sono `/dev/fb0` (mmap, `FBIOGET_*SCREENINFO`) e `/dev/input/event0|1` (tastiera, puntatore): la base per Qt `linuxfb`+`evdev`; **non ancora provato con Qt reale**. Tk/wx/GTK (X11) non partono |
 | Interfaccia web con JavaScript (Dash, Streamlit, React…) | il browser di NEOS mostra HTML e moduli, **non esegue JavaScript** |
 | `nidaqmx`, `pyvisa` con NI-VISA | richiedono i driver NI (vedi sopra); `pyvisa-py` per TCP/IP e seriale è utilizzabile |
 | `pyusb`/`libusb`, `hid`, `python-can` (SocketCAN) | mancano `/dev/bus/usb`, `sysfs`, `AF_CAN`: da fare |

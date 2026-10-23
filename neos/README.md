@@ -174,7 +174,7 @@ Obiettivo: eseguire applicazioni, librerie e (dove possibile) driver di Linux e 
 `docs/COMPAT.md` elenca onestamente cosa funziona e cosa manca; `tools/compat-scan.py` misura una applicazione *prima* di
 installarla (`pe` per Windows, `py` per Python, `elf` per Linux) e `make hiltest` esegue dentro NEOS le sonde di un'applicazione Python da banco prova.
 Novità di questo livello: memoria condivisa fra processi (`MAP_SHARED`, `multiprocessing`), `AF_UNIX`, priorità `SCHED_FIFO`,
-registro di Windows, Winsock, ricerca delle DLL in `C:\Windows\System32` e `PATH`, porte seriali (`/dev/ttyS1`, `/dev/ttyUSB0`, `/dev/ttyACM0`).
+registro di Windows, Winsock, ricerca delle DLL in `C:\Windows\System32` e `PATH`, porte seriali (`/dev/ttyS2`, `/dev/ttyUSB0`, `/dev/ttyACM0`), `/dev/fb0` e `/dev/input/event*`.
 
 ## USB
 
