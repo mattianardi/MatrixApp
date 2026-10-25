@@ -40,6 +40,9 @@ while time.time() - t0 < 600 and health is None:
 page = None
 try: page = urllib.request.urlopen('http://127.0.0.1:18800/', timeout=30).read(400).decode('latin1')
 except Exception as e: page = f'error {e}'
+if health and os.environ.get('HILSTUDIO_SHOT'):                                           # the real UI, rendered by a real browser, served by NEOS
+    r = subprocess.run(['node', 'tools/shot-web.js', 'http://127.0.0.1:18800/', os.environ['HILSTUDIO_SHOT']], capture_output=True, text=True, timeout=300)
+    print('browser:', (r.stdout + r.stderr).strip()[-300:])
 log.append(ses.run('run /bin/busybox tail -n 22 /tmp/hil.log', timeout=60))
 out = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', ses.close())
 open('build/hilstudio_session.log', 'w').write(out)
