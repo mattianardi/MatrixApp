@@ -1,4 +1,4 @@
-// node tools/shot-web.js <url> <out.png>: a real browser (Chromium via Playwright) loads a page and saves a screenshot.
+// node tools/shot-web.cjs <url> <out.png>: a real browser (Chromium via Playwright) loads a page and saves a screenshot.
 const { chromium } = require('/opt/node22/lib/node_modules/playwright');
 (async () => {
   const b = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium', args: ['--no-sandbox'] });
