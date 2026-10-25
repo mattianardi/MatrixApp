@@ -17,6 +17,7 @@ if not any(f.endswith('.whl') for f in os.listdir(wh)):
         if f.startswith('cmake'): os.remove(os.path.join(wh, f))                 # fmpy asks for it to build FMUs; not needed to run them
 subprocess.run(f'git -C {src} archive --format=tar.gz HEAD hilstudio -o {os.path.abspath(wh)}/hilstudio.tar.gz', shell=True, check=True)
 names = sorted(f.split('-')[0] for f in os.listdir(wh) if f.endswith('.whl'))
+if os.environ.get('HILSTUDIO_PKGS'): names = os.environ['HILSTUDIO_PKGS'].split(',')                 # debugging: a small subset
 open(os.path.join(wh, 'req.txt'), 'w').write('\n'.join(names) + '\n')          # the NEOS shell line is short: the list travels as a file
 class S(socketserver.ThreadingTCPServer): allow_reuse_address = True; daemon_threads = True
 class Q(http.server.SimpleHTTPRequestHandler):
@@ -27,7 +28,9 @@ from screenshot import Session
 ses = Session(boot=30, mem='1024', nic='user,model=e1000,hostfwd=tcp::18800-:8800', initrd=','.join([f'{build}/initrd.npk', f'{build}/pycache/glibc.npk', f'{build}/pycache/ca-certificates.npk', f'{build}/pycache/python3.npk']))
 T = int(os.environ.get('HILSTUDIO_STEP_TIMEOUT', '1800'))
 log = []
-log.append(ses.run('pkg install pip:--trusted-host 10.0.2.2 --no-index --no-deps --find-links http://10.0.2.2:8099/ -r http://10.0.2.2:8099/req.txt', timeout=T))
+log.append(ses.run('pkg install pip:' + os.environ.get('HILSTUDIO_PIPARGS', '') + ' --trusted-host 10.0.2.2 --no-index --no-deps --find-links http://10.0.2.2:8099/ -r http://10.0.2.2:8099/req.txt', timeout=T))
+log.append(ses.run('mem', timeout=60)); log.append(ses.run('ls /tmp', timeout=60))
+if os.environ.get('HILSTUDIO_PKGS'): out = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', ses.close()); print(out[-3000:]); sys.exit(0)
 log.append(ses.run('run /bin/busybox sh -c "mkdir -p /opt/hil && cd /opt/hil && wget -q -O - http://10.0.2.2:8099/hilstudio.tar.gz | tar xz && ls /opt/hil"', timeout=T))
 log.append(ses.run('run /bin/busybox sh -c "cd /opt/hil && /opt/python3/bin/python3 -m hilstudio.server --host 0.0.0.0 --port 8800 > /tmp/hil.log 2>&1 &"', timeout=120))
 health = None; t0 = time.time()

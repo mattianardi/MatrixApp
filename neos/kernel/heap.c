@@ -23,6 +23,19 @@ void heap_init(void)
     bump = P2V(a); arena_end = bump + pages * 4096; total = pages * 4096;
 }
 
+/* The arena has no coalescing (a size class only reuses its own frees), so a long file-heavy run can exhaust it while plenty of RAM is free:
+ * when the bump area runs out, take another chunk from the page allocator and carry on. */
+#define GROW_PAGES 4096                                              /* 16 MiB */
+static int grow_arena(size_t need)
+{
+    size_t pages = GROW_PAGES; if (need + 4096 > pages * 4096) pages = (need + 8191) / 4096;
+    u64 a = 0;
+    for (; pages >= (need + 4095) / 4096 + 1; pages /= 4) if ((a = pmm_alloc(pages))) break;       /* 16 MiB, else 4, else 1 */
+    if (!a) return 0;
+    bump = P2V(a); arena_end = bump + pages * 4096; total += pages * 4096;                  /* the tail of the previous chunk is abandoned */
+    return 1;
+}
+
 static int class_of(size_t n) { int k = 0; size_t s = 16; while (s < n) { s <<= 1; k++; } return k; }
 
 #define BIG_MIN (256u * 1024)
@@ -48,7 +61,7 @@ void *kmalloc(size_t n)
     u64 fl = irq_save();
     u8 *blk = NULL;
     if (freel[k]) { blk = (u8 *)freel[k] - HDR; freel[k] = freel[k]->next; }
-    else if (bump + HDR + sz <= arena_end) { blk = bump; bump += HDR + sz; }
+    else if (bump + HDR + sz <= arena_end || (grow_arena(HDR + sz) && bump + HDR + sz <= arena_end)) { blk = bump; bump += HDR + sz; }
     if (blk) { *(u64 *)blk = (u64)k; used += sz; if (used > peak) peak = used; }
     irq_restore(fl);
     return blk ? blk + HDR : NULL;
