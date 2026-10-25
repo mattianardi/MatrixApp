@@ -43,7 +43,7 @@ static struct tcp_conn conns[MAXC];
 static struct tcp_listener listeners[MAXL];
 extern int tcp_rx_loopback;
 static u16 next_port = 49152;
-static struct tunable *t_mss, *t_rto, *t_retries, *t_cwnd;
+static struct tunable *t_mss, *t_rto, *t_retries, *t_cwnd, *t_trace;
 
 static void tcp_tunables(void)
 {
@@ -51,6 +51,7 @@ static void tcp_tunables(void)
     t_mss     = tune_int("net", "tcp_mss",     "TCP segment payload size", TF_LIVE, 1400, 256, 1460, NULL);
     t_rto     = tune_int("net", "tcp_rto_ms",  "TCP retransmission timeout", TF_LIVE, 400, 20, 5000, NULL);
     t_retries = tune_int("net", "tcp_retries", "TCP retransmissions before giving up", TF_LIVE, 6, 1, 20, NULL);
+    t_trace   = tune_bool("net", "tcp_trace", "print every TCP segment (debugging)", TF_LIVE, 0, NULL);
     t_cwnd    = tune_int("net", "tcp_cwnd_segs", "TCP segments in flight per connection", TF_LIVE, 8, 1, 44, NULL);
 }
 
@@ -69,6 +70,7 @@ static int send_seg(struct tcp_conn *c, u32 rip, u16 lport, u16 rport, u32 seq, 
     if (len) memcpy(buf + hl, data, len);
     h->csum = be16(ip_checksum(buf, hl + len, ip_pseudo_sum(net_ip(), rip, 6, hl + len)));
     if (c) c->adv_win = win;
+    if (t_trace && t_trace->val) kprintf("[tcp] out %u>%u %s%s%s%s seq %u ack %u len %d win %u\n", lport, rport, flags & F_SYN ? "S" : "", flags & F_FIN ? "F" : "", flags & F_RST ? "R" : "", flags & F_ACK ? "A" : "", seq - (c ? c->seq0 : 0), c ? ack - c->rcv_nxt + c->rcv_nxt : ack, len, win);
     return ip_tx(rip, 6, buf, hl + len);
 }
 
@@ -226,6 +228,7 @@ void tcp_input(u32 src, const u8 *seg, int len)
     u16 sp = be16(h->sport), dp = be16(h->dport);
     u32 seq = be32(h->seq), ack = be32(h->ack);
     int plen = len - hl;
+    if (t_trace && t_trace->val) kprintf("[tcp] in  %u>%u %s%s%s%s seq %u ack %u len %d win %u\n", sp, dp, flags & F_SYN ? "S" : "", flags & F_FIN ? "F" : "", flags & F_RST ? "R" : "", flags & F_ACK ? "A" : "", seq, ack, plen, be16(h->win));
 
     struct tcp_conn *c = NULL;
     for (int i = 0; i < MAXC; i++)

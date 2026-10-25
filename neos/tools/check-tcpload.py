@@ -19,6 +19,10 @@ def one(i):
     t = time.time()
     try: n = len(urllib.request.urlopen('http://127.0.0.1:18801/', timeout=40).read()); return (n == 60000, time.time() - t)
     except Exception as e: return (False, time.time() - t)
+ses.run('tune set net.tcp_trace 1', timeout=30)
+ka = subprocess.run(['curl', '-s', '-m', '20', '-o', '/dev/null', '-o', '/dev/null', '-w', '%{http_code}:%{size_download}:%{time_total} ', 'http://127.0.0.1:18801/a', 'http://127.0.0.1:18801/b'], capture_output=True, text=True).stdout
+print('keep-alive (two requests on one connection):', ka)
+ses.run('tune set net.tcp_trace 0', timeout=30)
 res = []
 for par in (1, 4, 8, 16):
     with concurrent.futures.ThreadPoolExecutor(par) as ex: r = list(ex.map(one, range(max(24, par * 3))))

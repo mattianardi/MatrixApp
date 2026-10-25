@@ -4,10 +4,12 @@ const { chromium } = require('/opt/node22/lib/node_modules/playwright');
   const b = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium', args: ['--no-sandbox'] });
   const p = await b.newPage({ viewport: { width: 1280, height: 800 } });
   await p.route(/^https?:\/\/(?!127\.0\.0\.1)/, r => r.abort());             // external fonts/CDNs are unreachable here: fail fast instead of stalling the capture
+  const pending = new Set(); p.on('request', r => pending.add(r.url())); p.on('requestfinished', r => pending.delete(r.url())); p.on('requestfailed', r => pending.delete(r.url()));
   p.on('console', m => console.log('console:', m.text().slice(0, 160)));
   p.on('requestfailed', r => console.log('failed:', r.url()));
-  try { await p.goto(process.argv[2], { waitUntil: 'domcontentloaded', timeout: 240000 }); } catch (e) { console.log('goto:', String(e).slice(0, 120)); }
-  await p.waitForTimeout(25000);                                 // a single-page app keeps polling: never 'idle'
+  try { await p.goto(process.argv[2], { waitUntil: 'domcontentloaded', timeout: 90000 }); } catch (e) { console.log('goto:', String(e).slice(0, 120)); }
+  await p.waitForTimeout(15000);                                 // a single-page app keeps polling: never 'idle'
+  console.log('pending requests:', [...pending].map(u => u.replace(/^.*\//, '')).join(' '));
   console.log('title:', await p.title());
   const cdp = await p.context().newCDPSession(p);                // raw capture: does not wait for web fonts
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });

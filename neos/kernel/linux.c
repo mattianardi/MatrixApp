@@ -251,12 +251,15 @@ static long sys_brk(struct proc *p, u64 nb)
 }
 
 /* ------------------------------------------------------------ futex */
-static u8 fkeys[512];
+/* A futex is identified by (address space, address) - or (shared object, offset) for shared mappings. The key is a 63-bit hash used only as an
+ * opaque wait-queue identity (kernel objects live in the upper half, so it never clashes with them). With a small bucket table two different
+ * futexes sharing a bucket made wake(1) pick the wrong sleeper and lose the wake-up: the server hung on its second request. */
 static void *fkey(struct proc *p, u64 addr)
 {
     struct vma *v = vma_find(&p->as, addr);
-    if (v && v->shm) return &fkeys[shm_key(v, addr) & 511];             /* shared word: the same key in every process that maps it */
-    return &fkeys[((p->as.pml4 >> 12) * 31 + (addr >> 2)) & 511];
+    u64 h = (v && v->shm) ? shm_key(v, addr) * 0x9E3779B97F4A7C15ull : ((p->as.pml4 >> 12) * 0x9E3779B97F4A7C15ull) ^ ((addr >> 2) * 0xC2B2AE3D27D4EB4Full);
+    h ^= h >> 29; h *= 0xBF58476D1CE4E5B9ull; h ^= h >> 32;
+    return (void *)((h & 0x7FFFFFFFFFFFFFFFull) | 0x1000);
 }
 
 void futex_wake_addr(struct proc *p, u64 addr, int n) { wake_on(fkey(p, addr), n); }
