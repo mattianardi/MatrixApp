@@ -7,7 +7,7 @@ What it does: downloads the Linux wheels HIL Studio needs (pip download), serves
 port, starts NEOS from the ISO in QEMU (a window shows the NEOS desktop), types the install and start commands into the NEOS
 shell through a serial socket, waits until the server answers and opens http://127.0.0.1:8800 in your browser.
 Nothing in the HIL Studio folder is modified. Ctrl+C powers NEOS off."""
-import argparse, functools, http.server, io, os, shutil, socket, socketserver, subprocess, sys, tarfile, tempfile, threading, time, urllib.request, webbrowser
+import argparse, re, functools, http.server, io, os, shutil, socket, socketserver, subprocess, sys, tarfile, tempfile, threading, time, urllib.request, webbrowser
 
 PKGS = 'fastapi uvicorn websockets python-multipart fmpy bcrypt pydantic nptdms pyelftools psutil PyYAML pyserial'.split()
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -73,7 +73,7 @@ def read_until(prompt='neos> ', timeout=3600, echo=True):
             if echo: sys.stdout.write(d.replace('\r', '')); sys.stdout.flush()
             buf += d
         except socket.timeout: pass
-        if buf[start:].rstrip().endswith(prompt.strip()): return True
+        if re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', buf[start:]).rstrip().endswith(prompt.strip()): return True
         if qp.poll() is not None: return False
     return False
 def run(line, timeout=3600):
