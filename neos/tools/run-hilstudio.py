@@ -6,7 +6,12 @@
 What it does: downloads the Linux wheels HIL Studio needs (pip download), serves them and the program to the guest on a local
 port, starts NEOS from the ISO in QEMU (a window shows the NEOS desktop), types the install and start commands into the NEOS
 shell through a serial socket, waits until the server answers and opens http://127.0.0.1:8800 in your browser.
-Nothing in the HIL Studio folder is modified. Ctrl+C powers NEOS off."""
+Nothing in the HIL Studio folder is modified. Ctrl+C powers NEOS off.
+
+Data: NEOS runs from RAM, so by default it would forget everything at power-off. Here it gets a small persistent disk image
+(--disk, default neos-hil.disk in the current folder) that holds HIL Studio's data (settings, database, projects) in /data/hilstudio;
+on the first run a COPY of <hilstudio>/data is placed there. Changes are kept in the disk image and, at Ctrl+C, also exported
+to the folder given by --export (default neos-hil-export, never over your original data). --fresh re-imports the PC data."""
 import argparse, re, functools, http.server, io, os, shutil, socket, socketserver, subprocess, sys, tarfile, tempfile, threading, time, urllib.request, webbrowser
 
 PKGS = 'fastapi uvicorn websockets python-multipart fmpy bcrypt pydantic nptdms pyelftools psutil PyYAML pyserial'.split()
@@ -21,6 +26,12 @@ ap.add_argument('--mem', default='1024')
 ap.add_argument('--accel', default='', help='e.g. whpx (Windows Hypervisor Platform), kvm, hvf: much faster than the default software emulation')
 ap.add_argument('--headless', action='store_true', help='no QEMU window')
 ap.add_argument('--no-browser', action='store_true')
+ap.add_argument('--disk', default='neos-hil.disk', help='persistent disk image for HIL Studio data (created if missing)')
+ap.add_argument('--disk-mb', type=int, default=256)
+ap.add_argument('--data', default=None, help='data folder to import on the first run (default: <hilstudio>/data if it exists)')
+ap.add_argument('--export', default='neos-hil-export', help='folder where the data are exported at Ctrl+C')
+ap.add_argument('--fresh', action='store_true', help='import the PC data again, replacing the ones on the disk image')
+ap.add_argument('--no-data', action='store_true', help='RAM only: no disk image, no import')
 a = ap.parse_args()
 
 pkg_dir = os.path.join(a.hilstudio, 'hilstudio')
@@ -45,14 +56,39 @@ def skip(ti):
     return None if any(p in ti.name for p in ('__pycache__', '.pyc')) else ti
 with tarfile.open(os.path.join(www, 'hilstudio.tar.gz'), 'w:gz') as t: t.add(pkg_dir, arcname='hilstudio', filter=skip)
 
+data_dir = a.data or os.path.join(a.hilstudio, 'data')
+if not a.no_data:
+    if os.path.isdir(data_dir):
+        print(f'      importing a copy of {data_dir} (read-only)', flush=True)
+        with tarfile.open(os.path.join(www, 'data.tar.gz'), 'w:gz') as t:
+            for e in os.listdir(data_dir):
+                if e not in ('__pycache__',): t.add(os.path.join(data_dir, e), arcname=e)
+    else: open(os.path.join(www, 'data.tar.gz'), 'wb').close()
+    if not os.path.exists(a.disk):
+        with open(a.disk, 'wb') as f: f.truncate(a.disk_mb * 1048576)
+        print(f'      created the data disk {a.disk} ({a.disk_mb} MiB)', flush=True)
+open(os.path.join(www, 'export.py'), 'w').write('''import io, tarfile, urllib.request
+b = io.BytesIO()
+with tarfile.open(fileobj=b, mode="w:gz") as t: t.add("/data/hilstudio", arcname="data")
+urllib.request.urlopen(urllib.request.Request("http://10.0.2.2:%d/upload", data=b.getvalue(), method="POST"), timeout=120).read()
+print("exported", len(b.getvalue()))
+''' % a.http_port)
+exported = threading.Event()
 class Q(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *x): pass
+    def do_POST(self):
+        n = int(self.headers.get('Content-Length', 0)); body = self.rfile.read(n)
+        os.makedirs(a.export, exist_ok=True)
+        stamp = time.strftime('%Y%m%d-%H%M%S'); out = os.path.join(a.export, f'data-{stamp}.tar.gz')
+        open(out, 'wb').write(body); print(f'\n      data exported to {os.path.abspath(out)}', flush=True)
+        self.send_response(200); self.end_headers(); self.wfile.write(b'ok'); exported.set()
 class S(socketserver.ThreadingTCPServer): allow_reuse_address = True; daemon_threads = True
 srv = S(('0.0.0.0', a.http_port), functools.partial(Q, directory=www)); threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 print('[3/5] starting NEOS in QEMU...', flush=True)
 cmd = [qemu, '-cdrom', a.iso, '-boot', 'd', '-m', a.mem, '-cpu', 'max', '-vga', 'std', '-nic', f'user,model=e1000,hostfwd=tcp::{a.port}-:8800',
        '-serial', f'tcp:127.0.0.1:{a.serial_port},server=on,wait=off']
+if not a.no_data: cmd += ['-drive', f'file={a.disk},format=raw,if=ide']
 if a.accel: cmd += ['-accel', a.accel]
 if a.headless: cmd += ['-display', 'none']
 qp = subprocess.Popen(cmd)
@@ -105,6 +141,12 @@ try:
     while qp.poll() is None: time.sleep(2)
 except KeyboardInterrupt:
     print('\npowering NEOS off...')
+    try:
+        if not a.no_data:
+            sock.sendall(f'run /bin/busybox wget -q -O /tmp/export.py http://10.0.2.2:{a.http_port}/export.py\n'.encode()); time.sleep(3)
+            sock.sendall(b'run /opt/python3/bin/python3 /tmp/export.py\n'); exported.wait(60)
+            sock.sendall(b'disk sync\n'); time.sleep(3)
+    except Exception: pass
     try: sock.sendall(b'poweroff\n'); time.sleep(2)
     except Exception: pass
 finally:
