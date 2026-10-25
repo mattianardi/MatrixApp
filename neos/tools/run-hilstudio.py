@@ -81,7 +81,14 @@ def run(line, timeout=3600):
 
 try:
     print('[4/5] waiting for the NEOS shell (about a minute in software emulation)...', flush=True)
-    if not read_until(timeout=600): sys.exit('NEOS did not reach its prompt')
+    clean = lambda t: re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', t)
+    t0 = time.time()
+    while 'neos>' not in clean(buf) and time.time() - t0 < 600 and qp.poll() is None:            # the first prompt, then a moment for DHCP
+        read_until('\0', timeout=2)
+    if 'neos>' not in clean(buf): sys.exit('NEOS did not reach its prompt')
+    t0 = time.time()
+    while '[net] DHCP' not in clean(buf) and time.time() - t0 < 60: read_until('\0', timeout=2)
+    run('')
     h = f'http://10.0.2.2:{a.http_port}'
     run(f'pkg install pip:--trusted-host 10.0.2.2 --no-index --no-deps --find-links {h}/ -r {h}/req.txt')
     run(f'run /bin/busybox sh -c "mkdir -p /opt/hil && cd /opt/hil && wget -q -O - {h}/hilstudio.tar.gz | tar xz"')
