@@ -40,8 +40,9 @@ while time.time() - t0 < 600 and health is None:
 page = None
 try: page = urllib.request.urlopen('http://127.0.0.1:18800/', timeout=30).read(400).decode('latin1')
 except Exception as e: page = f'error {e}'
-log.append(ses.run('cat /tmp/hil.log', timeout=60))
+log.append(ses.run('run /bin/busybox tail -n 22 /tmp/hil.log', timeout=60))
 out = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', ses.close())
+open('build/hilstudio_session.log', 'w').write(out)
 print('health:', health); print('page:', (page or '')[:120].replace('\n', ' '))
 ok = health is not None and 'ok' in health.lower() or (health or '').strip().startswith('{')
 if not ok: print(out[-3500:])
