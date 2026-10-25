@@ -11,7 +11,7 @@
 #define PROT_READ 1
 #define PROT_WRITE 2
 #define PROT_EXEC 4
-#define MAX_VMAS 256
+#define MAX_VMAS 1536                                /* a Python with numpy, lxml, pydantic... maps several hundred segments */
 struct inode;
 struct shm;                                                                   /* pages shared between address spaces (MAP_SHARED, kept across fork) */
 struct vma { u64 start, end; u8 prot; struct inode *ino; u64 off; struct shm *shm; u64 phys; };   /* ino != NULL: private file mapping; shm != NULL: shared (off = offset into the object); phys != 0: device memory (frame buffer) */

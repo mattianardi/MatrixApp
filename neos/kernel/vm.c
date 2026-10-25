@@ -300,7 +300,8 @@ int vm_mprotect(struct aspace *as, u64 start, u64 len, int prot)
         u64 *pte = pte_of(as, va, 0);
         if (!vma_find(as, va) && !(pte && (*pte & P_PRESENT))) return -1;
     }
-    struct vma tmp[MAX_VMAS]; int nt = 0;
+    struct vma *tmp = kmalloc(sizeof(struct vma) * ((size_t)as->nvma + 1)); int nt = 0;
+    if (!tmp) return -1;
     for (int i = 0; i < as->nvma; i++) {
         struct vma v = as->vma[i];
         if (v.end <= start || v.start >= end) continue;
@@ -320,6 +321,7 @@ int vm_mprotect(struct aspace *as, u64 start, u64 len, int prot)
         *pte = f;
         __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
     }
+    kfree(tmp);
     return 0;
 }
 
