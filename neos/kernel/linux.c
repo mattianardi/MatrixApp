@@ -106,11 +106,12 @@ static long do_open(struct proc *p, char *abs, int flags, u32 mode)
     int dir = (i->mode & S_IFMT) == S_IFDIR;
     if (dir && (flags & O_ACCMODE)) return -E_ISDIR;
     if ((flags & O_DIRECTORY) && !dir) return -E_NOTDIR;
+    int chrh = 0;
     int ser = i->dev >= DEV_SERIAL0 && i->dev < DEV_SERIAL0 + SER_MAX, chr = i->dev >= DEV_CHR0 && i->dev < DEV_CHR0 + CHR_MAX;
-    if (chr) { const struct chrops *o = chr_ops(i->dev - DEV_CHR0); if (!o) return -E_NODEV; if (o->open && o->open(chr_minor(i->dev - DEV_CHR0)) < 0) return -E_NODEV; }
+    if (chr) { const struct chrops *o = chr_ops(i->dev - DEV_CHR0); if (!o) return -E_NODEV; chrh = chr_minor(i->dev - DEV_CHR0); if (o->open) { chrh = o->open(chrh); if (chrh < 0) return -E_NODEV; } }
     struct file *f = file_new(dir ? FT_DIR : i->dev == DEV_TTY ? FT_TTY : ser ? FT_SERIAL : chr ? FT_CHR : FT_INODE, flags);
     if (!f) return -E_NOMEM;
-    f->ino = i; inode_ref(i); if (ser) f->serial = i->dev - DEV_SERIAL0; if (chr) f->chr = i->dev - DEV_CHR0;
+    f->ino = i; inode_ref(i); if (ser) f->serial = i->dev - DEV_SERIAL0; if (chr) { f->chr = i->dev - DEV_CHR0; f->chrh = chrh; }
     if ((flags & O_TRUNC) && (flags & O_ACCMODE) && !dir && !i->dev) inode_truncate(i, 0);
     int fd = fdt_install(p->fds, f, 0, (flags & O_CLOEXEC) != 0);
     if (fd < 0) file_put(f);
@@ -206,7 +207,7 @@ static long sys_mmap(struct proc *p, u64 addr, u64 len, int prot, int flags, lon
             u64 va;
             if (flags & MAP_FIXED) { if ((addr & 0xFFF) || addr < 0x1000 || addr + plen > USER_TOP) return -E_INVAL; vm_munmap(&p->as, addr, plen); va = addr; }
             else { va = vm_find_gap(&p->as, addr && addr >= 0x10000 ? addr : p->mmap_next, plen); if (!va) return -E_NOMEM; if (!addr) p->mmap_next = va + plen; }
-            int e = o->mmap(chr_minor(f->chr), p, va, plen, prot, off);
+            int e = o->mmap(f->chrh, p, va, plen, prot, off);
             return e ? e : (long)va;
         }
         if (f->type != FT_INODE || (f->ino->mode & S_IFMT) != S_IFREG || f->ino->dev) return -E_NODEV;
@@ -442,7 +443,7 @@ static long sys_ioctl(struct proc *p, int fd, u64 req, u64 arg)
         return -E_NOTTY;
     }
     if (f->type == FT_SERIAL) return serial_ioctl(f->serial, req, arg, p);
-    if (f->type == FT_CHR) { const struct chrops *o = chr_ops(f->chr); return o->ioctl ? o->ioctl(chr_minor(f->chr), req, arg, p) : -E_NOTTY; }
+    if (f->type == FT_CHR) { const struct chrops *o = chr_ops(f->chr); return o->ioctl ? o->ioctl(f->chrh, req, arg, p) : -E_NOTTY; }
     if (f->type != FT_TTY) return -E_NOTTY;
     switch (req) {
     case 0x5401: {                                                         /* TCGETS: a cooked, echoing terminal */

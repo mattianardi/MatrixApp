@@ -16,6 +16,7 @@ struct chrops {
     void (*close)(int minor);
     int  (*mmap)(int minor, struct proc *p, u64 va, u64 len, int prot, u64 off);    /* map the device into p's address space at va */
     u64  (*size)(int minor);
+    int  per_open;                                                  /* open() returns a handle that replaces the minor in every later call (one object per open file) */
 };
 int chr_register(const char *path, const struct chrops *ops, int minor);
 const struct chrops *chr_ops(int slot);

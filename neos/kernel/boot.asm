@@ -72,7 +72,7 @@ _start:
     mov eax, ecx
     shl eax, 21
     or  eax, 0x83           ; present | writable | 2 MiB page (supervisor only)
-    cmp ecx, 512
+    cmp ecx, 1536           ; RAM below 3 GiB is cached; the PCI window above it (frame buffer, xHCI...) is not
     jb  .cached
     or  eax, 0x18           ; PWT | PCD
 .cached:

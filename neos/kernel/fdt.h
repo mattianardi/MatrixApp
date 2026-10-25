@@ -25,7 +25,7 @@ struct file {
     struct epoll *ep;
     u64 evcount; u32 evgen;
     int serial;                                               /* FT_SERIAL: port number */
-    int chr;                                                  /* FT_CHR: slot in the character-device table (chr.h) */
+    int chr, chrh;                                            /* FT_CHR: slot in the character-device table (chr.h) and the minor / per-open handle */
 };
 
 #define MAX_FDS 128

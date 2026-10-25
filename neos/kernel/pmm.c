@@ -2,7 +2,7 @@
 const char *dbg_free_what = "?"; int dbg_free_pid;
 
 #define PAGE 4096
-#define MAX_PAGES (1u << 18)            /* 1 GiB, what boot.asm identity-maps */
+#define MAX_PAGES (3u << 18)            /* 3 GiB, what boot.asm maps cached (RAM above that would need more tables) */
 
 extern char _kernel_end[];     /* virtual (higher half) */
 static u32 bitmap[MAX_PAGES / 32];      /* 1 = used */
