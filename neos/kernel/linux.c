@@ -168,7 +168,7 @@ static long sys_getdents(struct proc *p, int fd, u64 ubuf, u64 count)
     if (!out) return -E_NOMEM;
     size_t used = 0, cap = count < 65536 ? count : 65536;
     for (;;) {
-        char name[64]; int type; u32 ino;
+        char name[256]; int type; u32 ino;
         i64 idx = f->off;
         if (idx == 0) { strlcpy(name, ".", sizeof name); type = S_IFDIR; ino = f->ino->ino; }
         else if (idx == 1) { strlcpy(name, "..", sizeof name); type = S_IFDIR; ino = 1; }
