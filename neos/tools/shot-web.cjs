@@ -3,8 +3,10 @@ const { chromium } = require('/opt/node22/lib/node_modules/playwright');
 (async () => {
   const b = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium', args: ['--no-sandbox'] });
   const p = await b.newPage({ viewport: { width: 1280, height: 800 } });
-  await p.goto(process.argv[2], { waitUntil: 'networkidle', timeout: 120000 });
-  await p.waitForTimeout(2500);
+  p.on('console', m => console.log('console:', m.text().slice(0, 160)));
+  p.on('requestfailed', r => console.log('failed:', r.url()));
+  try { await p.goto(process.argv[2], { waitUntil: 'domcontentloaded', timeout: 240000 }); } catch (e) { console.log('goto:', String(e).slice(0, 120)); }
+  await p.waitForTimeout(25000);                                 // a single-page app keeps polling: never 'idle'
   console.log('title:', await p.title());
   await p.screenshot({ path: process.argv[3] });
   await b.close();
