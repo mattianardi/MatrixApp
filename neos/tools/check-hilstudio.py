@@ -40,6 +40,8 @@ while time.time() - t0 < 600 and health is None:
 page = None
 try: page = urllib.request.urlopen('http://127.0.0.1:18800/', timeout=30).read(400).decode('latin1')
 except Exception as e: page = f'error {e}'
+if health and os.environ.get('HILSTUDIO_HOLD'):                                          # keep NEOS running for manual poking until the file appears
+    while not os.path.exists('/tmp/w/hold.release') and time.time() - t0 < 14400: time.sleep(5)
 if health and os.environ.get('HILSTUDIO_SHOT'):                                           # the real UI, rendered by a real browser, served by NEOS
     r = subprocess.run(['node', 'tools/shot-web.cjs', 'http://127.0.0.1:18800/', os.environ['HILSTUDIO_SHOT']], capture_output=True, text=True, timeout=600)
     print('browser:', (r.stdout + r.stderr).strip()[-300:])

@@ -9,6 +9,8 @@ const { chromium } = require('/opt/node22/lib/node_modules/playwright');
   try { await p.goto(process.argv[2], { waitUntil: 'domcontentloaded', timeout: 240000 }); } catch (e) { console.log('goto:', String(e).slice(0, 120)); }
   await p.waitForTimeout(25000);                                 // a single-page app keeps polling: never 'idle'
   console.log('title:', await p.title());
-  await p.screenshot({ path: process.argv[3], timeout: 120000 });
+  const cdp = await p.context().newCDPSession(p);                // raw capture: does not wait for web fonts
+  const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+  require('fs').writeFileSync(process.argv[3], Buffer.from(shot.data, 'base64'));
   await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
