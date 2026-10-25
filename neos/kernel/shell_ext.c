@@ -214,7 +214,9 @@ int c_pkg(int argc, char **argv, struct ctx *c)
         const char *colon = strchr(argv[2], ':');
         if (colon && colon > argv[2] && colon - argv[2] < 8 && colon[1] != '/') {               /* backend:spec */
             char be[10]; size_t bl = (size_t)(colon - argv[2]); memcpy(be, argv[2], bl); be[bl] = 0;
-            return run_backend(be, sub, colon + 1);
+            char spec[300]; strlcpy(spec, colon + 1, sizeof spec);                      /* `pkg install pip:--no-index -r list.txt`: every word is part of the spec */
+            for (int i = 3; i < argc; i++) { size_t l = strlen(spec); if (l + 2 < sizeof spec) { spec[l] = ' '; strlcpy(spec + l + 1, argv[i], sizeof spec - l - 1); } }
+            return run_backend(be, sub, spec);
         }
     }
     if (!strcmp(sub, "update")) r = pkg_update(&e);
