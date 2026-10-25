@@ -125,15 +125,17 @@ static void init_thread(void *arg)
 
 const u32 *boot_mbi;                    /* the loader's multiboot info (framebuffer, modules) */
 
+static void mark(int i, char c) { ((volatile u16 *)P2V(0xB8000))[24 * 80 + 54 + i] = 0x4F00 | (u8)c; }   /* boot breadcrumb on the last text row */
+
 void kmain(u32 magic, u64 mbi_phys)
 {
     const void *mbi = P2V(mbi_phys);
     boot_mbi = mbi;
-    console_init();                       /* synchronous until console_async_start() */
+    console_init();                       /* synchronous until console_async_start() */ mark(0,'E');
     if (magic != 0x2BADB002) panic("bad multiboot magic %x", magic);
-    vm_init();                            /* drop the boot identity map: the lower half is for user processes */
-    gdt_init();
-    syscall_init();
+    vm_init();                            /* drop the boot identity map: the lower half is for user processes */ mark(1,'F');
+    gdt_init(); mark(2,'G');
+    syscall_init(); mark(3,'H');
 
     const u32 *mb = mbi;
     if (mb[0] & (1 << 3)) {
@@ -148,19 +150,19 @@ void kmain(u32 magic, u64 mbi_phys)
     t_test = tune_bool("boot", "test", "run the RT self-test and exit QEMU (CI)", TF_BOOT, 0, NULL);
 
     vm_tunables();
-    pmm_init(mbi);
-    heap_init();
-    idt_init();
-    pic_init();
-    timer_init();
+    pmm_init(mbi); mark(4,'I');
+    heap_init(); mark(5,'J');
+    idt_init(); mark(6,'K');
+    pic_init(); mark(7,'L');
+    timer_init(); mark(8,'M');
     sched_register_tunables();
-    sched_init();
+    sched_init(); mark(9,'N');
     module_register("api", "1", "syscall int 0x80 + struct neos_api");
-    input_init();
-    fs_init();
+    input_init(); mark(10,'O');
+    fs_init(); mark(11,'P');
     pkg_init();
     neofs_init();
-    net_init();
+    net_init(); mark(12,'Q');
     bus_init();
     agent_init();
     proc_init();
@@ -168,10 +170,10 @@ void kmain(u32 magic, u64 mbi_phys)
     agent_add("aih", AK_NATIVE, NULL, NULL, 0, &(const char *){ "" });
     linux_init();
     ui_init();
-    gui_init();
+    gui_init(); mark(13,'R');
     evdev_init();
     fbdev_init();
-    console_async_start();
+    console_async_start(); mark(14,'S');
     bus_start();
 
     splash_info("Build",     fmt_build);
@@ -181,7 +183,7 @@ void kmain(u32 magic, u64 mbi_phys)
     splash_info("Security",  fmt_sec);
     splash_info("Network",   fmt_net);
     splash_info("Modules",   fmt_mods);
-    splash_show();
+    splash_show(); mark(15,'T');
 
     thread_create("init", 3, init_thread, 0);
 

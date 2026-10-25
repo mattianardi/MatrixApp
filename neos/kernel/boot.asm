@@ -40,6 +40,7 @@ bits 32
 global _start
 _start:
     cli
+    mov word [0xB8000 + (24*80+50)*2], 0x4F41     ; 'A' boot breadcrumb (visible in text mode)
     mov esp, boot_stack_top
     cmp eax, 0x2BADB002
     jne .halt
@@ -94,6 +95,7 @@ _start:
     or  eax, 0x80000001     ; PG | PE
     mov cr0, eax
     lgdt [gdt64_ptr]
+    mov word [0xB8000 + (24*80+51)*2], 0x4F42     ; 'B' paging on
     jmp 0x08:long_mode
 .halt:
     hlt
@@ -107,6 +109,7 @@ long_mode:
     mov ss, ax
     mov fs, ax
     mov gs, ax
+    mov word [0xB8000 + (24*80+52)*2], 0x4F43     ; 'C' long mode
     mov edi, edi            ; zero-extend multiboot magic / info pointer (physical)
     mov esi, esi
     mov rax, higher_half
@@ -122,6 +125,8 @@ bits 64
 extern kmain
 higher_half:
     mov rsp, kstack_top
+    mov rax, 0xFFFFFFFF800B8000 + (24*80+53)*2
+    mov word [rax], 0x4F44                        ; 'D' higher half
     xor ebp, ebp
     call kmain
 .hang:
