@@ -24,6 +24,7 @@ ap.add_argument('--http-port', type=int, default=8099, help='temporary port that
 ap.add_argument('--serial-port', type=int, default=4555)
 ap.add_argument('--mem', default='1024')
 ap.add_argument('--accel', default='', help='e.g. whpx (Windows Hypervisor Platform), kvm, hvf: much faster than the default software emulation')
+ap.add_argument('--cpu', default='max', help='QEMU CPU model; with WHPX try --cpu qemu64 or --cpu host if "Unexpected VP exit" appears')
 ap.add_argument('--headless', action='store_true', help='no QEMU window')
 ap.add_argument('--no-browser', action='store_true')
 ap.add_argument('--disk', default='neos-hil.disk', help='persistent disk image for HIL Studio data (created if missing)')
@@ -86,7 +87,7 @@ class S(socketserver.ThreadingTCPServer): allow_reuse_address = True; daemon_thr
 srv = S(('0.0.0.0', a.http_port), functools.partial(Q, directory=www)); threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 print('[3/5] starting NEOS in QEMU...', flush=True)
-cmd = [qemu, '-cdrom', a.iso, '-boot', 'd', '-m', a.mem, '-cpu', 'max', '-vga', 'std', '-nic', f'user,model=e1000,hostfwd=tcp::{a.port}-:8800',
+cmd = [qemu, '-cdrom', a.iso, '-boot', 'd', '-m', a.mem, '-cpu', a.cpu, '-vga', 'std', '-nic', f'user,model=e1000,hostfwd=tcp::{a.port}-:8800',
        '-serial', f'tcp:127.0.0.1:{a.serial_port},server=on,wait=off']
 if not a.no_data: cmd += ['-drive', f'file={a.disk},format=raw,if=ide']
 if a.accel: cmd += ['-accel', a.accel]
