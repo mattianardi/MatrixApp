@@ -45,7 +45,7 @@ void vm_init(void)
 void vm_tunables(void)
 {
     module_register("vm", "1.0", "4-level paging, per-process address spaces, SMEP/SMAP, NX");
-    t_limit = tune_int("proc", "max_pages", "per-process memory limit (4 KiB pages)", TF_LIVE, 65536, 16, 262144, NULL);
+    t_limit = tune_int("proc", "max_pages", "per-process memory limit (4 KiB pages)", TF_LIVE, 131072, 16, 262144, NULL);
 }
 
 void vm_switch(u64 pml4) { __asm__ volatile("mov %0, %%cr3" :: "r"(pml4) : "memory"); }

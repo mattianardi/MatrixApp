@@ -168,7 +168,7 @@ int  hw_random(u64 *v);
 int  cpu_invariant_tsc(void);
 
 /* ---- sched.c: static-priority preemptive, 0 = highest ---- */
-#define SCHED_MAX_THREADS 32
+#define SCHED_MAX_THREADS 256
 #define SCHED_PRIO_IDLE   7
 typedef void (*thread_fn)(void *);
 struct thread_info { int id; const char *name; const char *state; int prio; u64 runticks; int stack_kib; u64 lat_max_ns; };
