@@ -27,4 +27,5 @@ int  pkg_stage_cache(const u8 *d, size_t n, const char **err);
 int  pkg_installed_table(struct table *t);
 int  pkg_install_blob(const char *name, const char *ver, const u8 *d, size_t n, const char **err);
 int  pkg_extract_root(const u8 *d, size_t n, const char **err);
+int  pkg_is_root_module(const u8 *d, size_t n);                    /* .pkginfo says extract=root: unpack at boot like the initrd */
 int  pkg_build(const char *name, const char *ver, const char *dir, char *outpath, size_t on, char sha[65], size_t *size, const char **err);

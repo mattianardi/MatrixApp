@@ -311,6 +311,14 @@ int pkg_remove(const char *name, const char **err)
 }
 
 /* unpack an NPK into the filesystem root (used for the boot-time initrd) */
+int pkg_is_root_module(const u8 *d, size_t n)
+{
+    const u8 *pi; size_t pl; char v[16];
+    if (npk_find(d, n, ".pkginfo", &pi, &pl)) return 0;
+    kv((const char *)pi, pl, "extract", v, sizeof v);
+    return !strcmp(v, "root");
+}
+
 int pkg_extract_root(const u8 *d, size_t n, const char **err)
 {
     int files = npk_walk("", d, n, 0, 1, err);

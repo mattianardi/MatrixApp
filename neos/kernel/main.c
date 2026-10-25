@@ -63,6 +63,10 @@ static void load_initrd(void)
             int n = pkg_extract_root(P2V(start), end - start, &e);
             if (n < 0) { kprintf("[initrd] module %d rejected: %s\n", i, e); continue; }
             kprintf("[initrd] %d files unpacked (%u KiB)\n", n, kib);
+        } else if (pkg_is_root_module(P2V(start), end - start)) {       /* a package marked `extract=root` in its .pkginfo is unpacked into the filesystem like the initrd */
+            int n = pkg_extract_root(P2V(start), end - start, &e);
+            if (n < 0) { kprintf("[initrd] module %d rejected: %s\n", i, e); continue; }
+            kprintf("[initrd] module %d: %d files unpacked (%u KiB)\n", i, n, kib);
         } else {                                                        /* further modules are packages for the offline cache */
             if (pkg_stage_cache(P2V(start), end - start, &e)) { kprintf("[cache] module %d rejected: %s\n", i, e); continue; }
             kprintf("[cache] package staged (%u KiB): `pkg install` works offline\n", kib);

@@ -849,6 +849,20 @@ static struct frame *linux_syscall_impl(struct frame *f)
     case 213: case 291: { struct file *ef = file_new(FT_EPOLL, 2); if (!ef) RET(-E_NOMEM); ef->ep = kmalloc(2048); if (!ef->ep) { kfree(ef); RET(-E_NOMEM); } memset(ef->ep, 0, 2048); r = fdt_install(p->fds, ef, 0, nr == 291 && (a0 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }
     case 233: { struct file *ef = fdt_get(p->fds, (int)a0); if (!ef || ef->type != FT_EPOLL) RET(-E_BADF); struct epoll_ev ev = { 0, 0 }; if (a1 != 2 && copy_from_user(&p->as, &ev, a3, sizeof ev)) RET(-E_FAULT); RET(epoll_ctl_op(ef, p->fds, (int)a1, (int)a2, ev.events, ev.data)); }
     case 232: case 281: RET(sys_epoll_wait(p, (int)a0, a1, (int)a2, (int)a3));
+    case 319: {                                                           /* memfd_create: an unlinked file that lives while it is open or mapped */
+        static u32 memfd_n; char path[48]; ksnprintf(path, sizeof path, "/dev/shm/.memfd-%u", ++memfd_n);
+        long fd = do_open(p, path, 0102 | 0200 | 2, 0600);                /* O_CREAT | O_EXCL | O_RDWR */
+        if (fd >= 0) { vfs_unlink(path); if (a1 & 1) p->fds->cloexec[fd] = 1; }
+        RET(fd);
+    }
+    case 285: { struct file *x = fdt_get(p->fds, (int)a0); if (!x || x->type != FT_INODE) RET(-E_BADF); if (!(a1 & 1) && a2 + a3 > x->ino->size) inode_truncate(x->ino, a2 + a3); RET(0); }   /* fallocate */
+    case 118: case 120: { u32 z = 0; if ((a0 && copy_to_user(&p->as, a0, &z, 4)) || (a1 && copy_to_user(&p->as, a1, &z, 4)) || (a2 && copy_to_user(&p->as, a2, &z, 4))) RET(-E_FAULT); RET(0); }   /* getresuid / getresgid */
+    case 141: RET(0);                                                     /* setpriority */
+    case 253: case 294: { struct file *ef = file_new(FT_EVENTFD, 2); if (!ef) RET(-E_NOMEM); r = fdt_install(p->fds, ef, 0, nr == 294 && (a0 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }   /* inotify_init(1): a descriptor that never reports a change */
+    case 254: RET(1);                                                     /* inotify_add_watch: accepted, nothing is ever reported */
+    case 255: RET(0);
+    case 222: case 223: case 224: case 225: case 226: RET(-E_NOSYS);      /* POSIX timers: callers fall back to timerfd / sleeping */
+    case 444: case 330: case 331: RET(-E_NOSYS);                          /* landlock, pkeys */
     case 284: case 290: { struct file *ef = file_new(FT_EVENTFD, (nr == 290 && (a1 & SOCK_NONBLOCK_)) ? O_NONBLOCK | 2 : 2); if (!ef) RET(-E_NOMEM); ef->evcount = a0; r = fdt_install(p->fds, ef, 0, nr == 290 && (a1 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }
 
     case 271: { long to = -1; if (a2) { u64 ts[2]; if (copy_from_user(&p->as, ts, a2, 16)) RET(-E_FAULT); to = (long)(ts[0] * 1000 + ts[1] / 1000000); } RET(sys_poll(p, a0, a1, to)); }
