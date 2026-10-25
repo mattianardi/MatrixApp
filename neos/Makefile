@@ -127,7 +127,7 @@ gui: all $(BUILD)/neos.disk
 $(BUILD)/neos.iso: all
 	rm -rf $(BUILD)/iso && mkdir -p $(BUILD)/iso/boot/grub
 	cp $(BUILD)/matrix32.elf $(BUILD)/initrd.npk $(CACHE_NPK) $(BUILD)/iso/boot/
-	printf 'set timeout=2\nset gfxpayload=1024x768x32\nmenuentry "NEOS" {\n  multiboot /boot/matrix32.elf\n  module /boot/initrd.npk\n$(foreach f,$(CACHE_NPK),  module /boot/$(notdir $(f))\n)}\n' > $(BUILD)/iso/boot/grub/grub.cfg
+	printf 'set timeout=5\nmenuentry "NEOS" {\n  set gfxpayload=1024x768x32\n  multiboot /boot/matrix32.elf\n  module /boot/initrd.npk\n$(foreach f,$(CACHE_NPK),  module /boot/$(notdir $(f))\n)}\nmenuentry "NEOS - safe mode (text console, no graphical desktop)" {\n  set gfxpayload=text\n  multiboot /boot/matrix32.elf\n  module /boot/initrd.npk\n$(foreach f,$(CACHE_NPK),  module /boot/$(notdir $(f))\n)}\n' > $(BUILD)/iso/boot/grub/grub.cfg
 	grub-mkrescue -o $@ $(BUILD)/iso 2>/dev/null
 iso: $(BUILD)/neos.iso
 run-iso: $(BUILD)/neos.iso $(BUILD)/neos.disk
