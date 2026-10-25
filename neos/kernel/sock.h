@@ -10,7 +10,7 @@ long   sock_connect(struct sock *s, u32 ip, u16 port);
 long   sock_bind(struct sock *s, u32 ip, u16 port);
 long   sock_listen(struct sock *s, int backlog);
 long   sock_accept(struct sock *s, int nonblock, struct sock **out);
-long   sock_send(struct sock *s, const void *buf, size_t n, int has_dst, u32 ip, u16 port);
+long   sock_send(struct sock *s, const void *buf, size_t n, int has_dst, u32 ip, u16 port, int nonblock);   /* streams: bytes queued, -EAGAIN when full and non-blocking */
 long   sock_recv(struct sock *s, void *buf, size_t n, int nonblock, u32 *sip, u16 *sport);
 int    sock_poll(struct sock *s, int events);
 u32    sock_in_gen(struct sock *s);

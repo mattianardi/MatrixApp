@@ -609,20 +609,20 @@ static long sys_socket(struct proc *p, int domain, int type, int proto)
 
 static long sys_sendto(struct proc *p, int fd, u64 ubuf, u64 len, int flags, u64 uaddr, u64 alen)
 {
-    (void)flags;
-    struct sock *s = fd_sock(p, fd, NULL); if (!s) return fdt_get(p->fds, fd) ? -88 : -E_BADF;
+    struct file *sf; struct sock *s = fd_sock(p, fd, &sf); if (!s) return fdt_get(p->fds, fd) ? -88 : -E_BADF;
+    int nb = (sf->flags & O_NONBLOCK) || (flags & MSG_DONTWAIT_);
     u32 ip = 0; u16 port = 0; int hasd = 0;
     if (uaddr) { long r = get_sockaddr(p, uaddr, alen, &ip, &port); if (r) return r; hasd = 1; }
-    size_t chunk = len < 32768 ? len : 32768; if (!chunk) return sock_send(s, "", 0, hasd, ip, port);
+    size_t chunk = len < 32768 ? len : 32768; if (!chunk) return sock_send(s, "", 0, hasd, ip, port, nb);
     u8 *b = kmalloc(chunk); if (!b) return -E_NOMEM;
     long total = 0;
     while ((u64)total < len) {
         size_t c = len - (u64)total < chunk ? len - (u64)total : chunk;
         if (copy_from_user(&p->as, b, ubuf + (u64)total, c)) { kfree(b); return total ? total : -E_FAULT; }
-        long r = sock_send(s, b, c, hasd, ip, port);
+        long r = sock_send(s, b, c, hasd, ip, port, nb);
         if (r < 0) { kfree(b); return total ? total : r; }
         total += r;
-        if (!sock_is_stream(s)) break;
+        if (!sock_is_stream(s) || (size_t)r < c) break;                  /* datagram, or a non-blocking stream that took only part */
     }
     kfree(b);
     return total;
@@ -658,7 +658,7 @@ static long sys_sendmsg(struct proc *p, int fd, u64 umsg, int flags)
     long r;
     if (!s) r = fdt_get(p->fds, fd) ? -88 : -E_BADF;
     else if (m.name && m.namelen && (r = get_sockaddr(p, m.name, m.namelen, &ip, &port)) != 0) { }
-    else { hasd = m.name != 0; r = sock_send(s, b, tot, hasd, ip, port); }
+    else { hasd = m.name != 0; r = sock_send(s, b, tot, hasd, ip, port, 0); }
     (void)flags; kfree(b);
     return r;
 }
@@ -843,7 +843,7 @@ static struct frame *linux_syscall_impl(struct frame *f)
         if (copy_to_user(&p->as, a3, sv, sizeof sv)) RET(-E_FAULT);
         RET(0);
     }
-    case 213: case 291: { struct file *ef = file_new(FT_EPOLL, 2); if (!ef) RET(-E_NOMEM); ef->ep = kmalloc(1024); if (!ef->ep) { kfree(ef); RET(-E_NOMEM); } memset(ef->ep, 0, 1024); r = fdt_install(p->fds, ef, 0, nr == 291 && (a0 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }
+    case 213: case 291: { struct file *ef = file_new(FT_EPOLL, 2); if (!ef) RET(-E_NOMEM); ef->ep = kmalloc(2048); if (!ef->ep) { kfree(ef); RET(-E_NOMEM); } memset(ef->ep, 0, 2048); r = fdt_install(p->fds, ef, 0, nr == 291 && (a0 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }
     case 233: { struct file *ef = fdt_get(p->fds, (int)a0); if (!ef || ef->type != FT_EPOLL) RET(-E_BADF); struct epoll_ev ev = { 0, 0 }; if (a1 != 2 && copy_from_user(&p->as, &ev, a3, sizeof ev)) RET(-E_FAULT); RET(epoll_ctl_op(ef, p->fds, (int)a1, (int)a2, ev.events, ev.data)); }
     case 232: case 281: RET(sys_epoll_wait(p, (int)a0, a1, (int)a2, (int)a3));
     case 284: case 290: { struct file *ef = file_new(FT_EVENTFD, (nr == 290 && (a1 & SOCK_NONBLOCK_)) ? O_NONBLOCK | 2 : 2); if (!ef) RET(-E_NOMEM); ef->evcount = a0; r = fdt_install(p->fds, ef, 0, nr == 290 && (a1 & SOCK_CLOEXEC_)); if (r < 0) file_put(ef); RET(r); }

@@ -511,6 +511,30 @@ int c_dpkg(int argc, char **argv, struct ctx *c)
     return -1;
 }
 
+int tcp_dump(int i, int *state, u32 *rip, u16 *rport, u16 *lport, u32 *queued, int *fin, int *rst);
+int tcp_listeners_dump(int i, u16 *port, u32 *queued);
+int c_tcp(int argc, char **argv, struct ctx *c)
+{
+    (void)argc; (void)argv;
+    static const char *st[] = { "free", "syn-sent", "established", "closed", "syn-rcvd" };
+    tb_init(c->tb, "slot", "state", "peer", "local port", "queued", "flags", NULL);
+    for (int i = 0; ; i++) {
+        int s, fin, rst; u32 ip, q; u16 rp, lp;
+        if (tcp_dump(i, &s, &ip, &rp, &lp, &q, &fin, &rst)) break;
+        if (s == 0 || tb_newrow(c->tb) < 0) continue;
+        tb_set(c->tb, 0, "%d", i); tb_set(c->tb, 1, "%s", st[s]);
+        tb_set(c->tb, 2, "%d.%d.%d.%d:%d", ip >> 24, (ip >> 16) & 255, (ip >> 8) & 255, ip & 255, rp);
+        tb_set(c->tb, 3, "%d", lp); tb_set(c->tb, 4, "%lu", (u64)q); tb_set(c->tb, 5, "%s%s", fin ? "fin " : "", rst ? "rst" : "");
+    }
+    for (int i = 0; ; i++) {
+        u16 port; u32 q;
+        if (i >= 16) break;
+        if (tcp_listeners_dump(i, &port, &q) || tb_newrow(c->tb) < 0) continue;
+        tb_set(c->tb, 0, "L%d", i); tb_set(c->tb, 1, "listening"); tb_set(c->tb, 2, "-"); tb_set(c->tb, 3, "%d", port); tb_set(c->tb, 4, "%lu", (u64)q); tb_set(c->tb, 5, "");
+    }
+    return 0;
+}
+
 int c_usb(int argc, char **argv, struct ctx *c)
 {
     const char *sub = argc > 1 ? argv[1] : "list", *e = "";

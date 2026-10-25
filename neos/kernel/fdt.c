@@ -109,7 +109,7 @@ long file_write(struct file *f, const void *buf, size_t n)
         return r;
     }
     case FT_DIR: return -E_ISDIR;
-    case FT_SOCK: return sock_send(f->sock, buf, n, 0, 0, 0);
+    case FT_SOCK: return sock_send(f->sock, buf, n, 0, 0, 0, f->flags & O_NONBLOCK);
     case FT_EVENTFD: {
         if (n < 8) return -E_INVAL;
         u64 v; memcpy(&v, buf, 8);

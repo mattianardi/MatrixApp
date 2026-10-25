@@ -56,7 +56,9 @@ void tcp_input(u32 src, const u8 *seg, int len);
 /* tcp.c */
 struct tcp_conn;
 struct tcp_conn *tcp_connect(u32 ip, u16 port, u64 timeout_ms);
-int  tcp_send(struct tcp_conn *c, const void *data, int len);
+int  tcp_send(struct tcp_conn *c, const void *data, int len);               /* 0 = queued for sending (blocks only while the transmit ring is full) */
+int  tcp_write(struct tcp_conn *c, const void *data, int len, int nonblock);   /* bytes accepted; 0 = ring full (non-blocking); -1 = broken */
+int  tcp_can_write(struct tcp_conn *c);
 int  tcp_recv(struct tcp_conn *c, void *buf, int cap, u64 timeout_ms);   /* >0 bytes, 0 = peer closed, <0 timeout/reset */
 void tcp_close(struct tcp_conn *c);
 void tcp_tick(void);

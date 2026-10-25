@@ -99,7 +99,7 @@ long sock_accept(struct sock *s, int nonblock, struct sock **out)
     return 0;
 }
 
-long sock_send(struct sock *s, const void *buf, size_t n, int has_dst, u32 ip, u16 port)
+long sock_send(struct sock *s, const void *buf, size_t n, int has_dst, u32 ip, u16 port, int nonblock)
 {
     if (s->type == SOCK_DGRAM_) {
         long r = ensure_udp_bound(s); if (r) return r;
@@ -111,7 +111,8 @@ long sock_send(struct sock *s, const void *buf, size_t n, int has_dst, u32 ip, u
     if (!s->tc || s->shut_wr) return -32;                               /* EPIPE */
     if (!tcp_is_open(s->tc) && !tcp_available(s->tc)) return -32;
     if (!n) return 0;
-    return tcp_send(s->tc, buf, (int)n) ? -32 : (long)n;
+    long w = tcp_write(s->tc, buf, (int)n, nonblock);
+    return w < 0 ? -32 : w == 0 ? -11 : w;                              /* EPIPE / EAGAIN */
 }
 
 long sock_recv(struct sock *s, void *buf, size_t n, int nonblock, u32 *sip, u16 *sport)
@@ -142,7 +143,7 @@ int sock_poll(struct sock *s, int events)
     if (s->ls) { if ((events & 1) && tcp_listener_ready(s->ls)) r |= 1; return r; }
     if (!s->tc) { if (events & 4) r |= 4; return r; }
     if ((events & 1) && tcp_available(s->tc)) r |= 1;
-    if ((events & 4) && tcp_is_open(s->tc)) r |= 4;
+    if ((events & 4) && tcp_can_write(s->tc)) r |= 4;
     if (!tcp_is_open(s->tc) && !tcp_available(s->tc)) r |= 0x10;       /* POLLHUP */
     return r;
 }
