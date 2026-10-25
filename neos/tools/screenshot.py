@@ -12,17 +12,19 @@ def ppm_to_png(ppm, png):
     return w, h, pix
 
 class Session:
-    def __init__(self, boot=14, initrd='build/initrd.npk', extra=None, kargs=''):
+    def __init__(self, boot=14, initrd='build/initrd.npk', extra=None, kargs='', nic='user,model=e1000', mem='512'):
         self.dir = tempfile.mkdtemp()
         self.mon = os.path.join(self.dir, 'mon.sock')
         os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-        self.p = subprocess.Popen(['qemu-system-x86_64', '-kernel', 'build/matrix32.elf', '-initrd', initrd, '-m', '512', '-display', 'none',
-            '-cpu', 'max', '-serial', 'stdio', '-no-reboot', '-vga', 'std', '-nic', 'user,model=e1000', '-monitor', f'unix:{self.mon},server,nowait', '-append', kargs] + (extra or []),
+        self.p = subprocess.Popen(['qemu-system-x86_64', '-kernel', 'build/matrix32.elf', '-initrd', initrd, '-m', mem, '-display', 'none',
+            '-cpu', 'max', '-serial', 'stdio', '-no-reboot', '-vga', 'std', '-nic', nic, '-monitor', f'unix:{self.mon},server,nowait', '-append', kargs] + (extra or []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.out = ''
         threading.Thread(target=self._reader, daemon=True).start()
         time.sleep(boot)
+        self.lock = threading.Lock()
         self.m = socket.socket(socket.AF_UNIX); self.m.connect(self.mon); time.sleep(0.3); self.m.recv(65536)
+        if os.environ.get('NEOS_LIVE'): self.start_live(os.environ['NEOS_LIVE'])         # a PNG of the screen, refreshed while the session runs
     def _reader(self):
         while True:
             b = self.p.stdout.read1(4096) if hasattr(self.p.stdout, 'read1') else self.p.stdout.read(1)
@@ -44,9 +46,21 @@ class Session:
             time.sleep(0.3)
         return False
     def hmp(self, c):
-        self.m.sendall(c.encode() + b'\n'); time.sleep(0.4)
-        try: self.m.settimeout(0.5); return self.m.recv(65536)
-        except Exception: return b''
+        with self.lock:
+            self.m.sendall(c.encode() + b'\n'); time.sleep(0.4)
+            try: self.m.settimeout(0.5); return self.m.recv(65536)
+            except Exception: return b''
+    def start_live(self, png, every=4):
+        """Keep `png` up to date with the guest's screen (a background thread; the monitor accepts one client, so it shares ours)."""
+        def loop():
+            ppm = png + '.ppm'
+            while self.p.poll() is None:
+                try:
+                    self.hmp(f'screendump {ppm}'); time.sleep(0.8)
+                    if os.path.exists(ppm) and os.path.getsize(ppm) > 1000: ppm_to_png(ppm, png + '.tmp.png'); os.replace(png + '.tmp.png', png)
+                except Exception: pass
+                time.sleep(every)
+        threading.Thread(target=loop, daemon=True).start()
     def cmd(self, c, wait=2.0): self.p.stdin.write(c.encode() + b'\n'); self.p.stdin.flush(); time.sleep(wait)
     def shot(self, name):
         ppm = os.path.join(self.dir, name + '.ppm'); self.hmp(f'screendump {ppm}'); time.sleep(0.8)

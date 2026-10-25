@@ -328,14 +328,6 @@ static void draw_taskbar(void)
 static const char *const arrow[] = {
     "X           ", "XX          ", "X.X         ", "X..X        ", "X...X       ", "X....X      ", "X.....X     ", "X......X    ",
     "X.......X   ", "X........X  ", "X.....XXXXX ", "X..X..X     ", "X.X X..X    ", "XX  X..X    ", "X    X..X   ", "     X..X   ", "      XX    " };
-static void draw_cursor(int mx, int my)
-{
-    for (int r = 0; r < 17; r++) for (int c = 0; c < 12; c++) {
-        char ch = arrow[r][c];
-        if (ch == 'X') px(mx + c, my + r, 0x000000); else if (ch == '.') px(mx + c, my + r, 0xFFFFFF);
-    }
-}
-
 /* ------------------------------------------------------------ frame + input */
 static void frame_draw(int mx, int my)
 {
@@ -348,7 +340,30 @@ static void frame_draw(int mx, int my)
         if (id == W_TERM) draw_terminal(); else if (id == W_MON) draw_monitor(); else if (id == W_BROWSER) draw_browser(); else draw_agents();
     }
     draw_taskbar();
-    draw_cursor(mx, my);
+    (void)mx; (void)my;                                                    /* the pointer is drawn on the frame buffer itself, see cursor_* */
+}
+
+/* The pointer lives on the real frame buffer: moving it restores the pixels under the old arrow and draws the new one, so a mouse move
+ * no longer redraws and copies the whole 1024x768 scene (which is what made the workspace sluggish under software emulation). */
+static int cur_x, cur_y, cur_ok; static u32 cur_save[17 * 12];
+static u32 *fbpix(int x, int y) { return (u32 *)((u8 *)fb + (size_t)y * fb_pitch) + x; }
+static void cursor_erase(void)
+{
+    if (!cur_ok) return;
+    for (int r = 0; r < 17; r++) for (int c = 0; c < 12; c++) {
+        int x = cur_x + c, y = cur_y + r;
+        if (arrow[r][c] != ' ' && x >= 0 && x < SW && y >= 0 && y < SH) *fbpix(x, y) = cur_save[r * 12 + c];
+    }
+    cur_ok = 0;
+}
+static void cursor_draw_fb(int mx, int my)
+{
+    for (int r = 0; r < 17; r++) for (int c = 0; c < 12; c++) {
+        char ch = arrow[r][c]; int x = mx + c, y = my + r;
+        if ((ch != 'X' && ch != '.') || x < 0 || x >= SW || y < 0 || y >= SH) continue;
+        u32 *p = fbpix(x, y); cur_save[r * 12 + c] = *p; *p = ch == 'X' ? 0x000000 : 0xFFFFFF;
+    }
+    cur_x = mx; cur_y = my; cur_ok = 1;
 }
 
 static void flush(void)
@@ -419,10 +434,11 @@ static void gui_thread(void *arg)
         for (int i = 0; i < VGA_ROWS * VGA_COLS; i++) sig = (sig ^ cells[i]) * 16777619u;
         int cr, cc; console_cursor(&cr, &cc); sig = (sig ^ (u32)(cr * 100 + cc)) * 16777619u;
         sig = (sig ^ (u32)(approval_count_pending() * 7 + agent_is_frozen())) * 16777619u;
-        if (!dirty && mx == lx && my == ly && mb == lb && seq == lseq && stats_epoch == lstats && sig == lsig) continue;
+        int scene = dirty || mb != lb || stats_epoch != lstats || sig != lsig || (drag >= 0 && (mx != lx || my != ly)) || lx < 0;
+        if (!scene && mx == lx && my == ly && seq == lseq) continue;
         dirty = 0; lx = mx; ly = my; lb = mb; lseq = seq; lstats = stats_epoch; lsig = sig;
-        frame_draw(mx, my);
-        flush();
+        if (scene) { cur_ok = 0; frame_draw(mx, my); flush(); cursor_draw_fb(mx, my); }
+        else { cursor_erase(); cursor_draw_fb(mx, my); }
     }
 }
 
