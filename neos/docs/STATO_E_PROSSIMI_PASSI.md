@@ -2,7 +2,7 @@
 
 ## Funziona ed è verificato (QEMU)
 - HIL Studio 0.33.3 gira dentro NEOS (server FastAPI) e la sua pagina si carica in un browser vero tramite porta inoltrata:
-  `tools/run-hilstudio.py` (solo provato su Linux), `tools/check-hilstudio.py`.
+  `tools/run-hilstudio.py` (solo provato su Linux; dati persistenti: disco `neos-hil.disk` + import di una copia di `<hilstudio>/data` al primo avvio + export in `neos-hil-export/` a Ctrl+C; opzioni `--disk --data --export --fresh --no-data`; misurato su QEMU: progetto creato in NEOS ritrovato dopo riavvio e presente nell'export), `tools/check-hilstudio.py`.
 - Correzioni di NEOS emerse da quel lavoro: TCP asincrono (finestra, ritrasmissione, close non bloccante), futex con identità esatta
   (le collisioni perdevano i risvegli), heap che si allarga, nomi di file fino a 255 caratteri, 256 slot di thread, 1536 mappe per processo,
   memoria condivisa/AF_UNIX/real-time/seriale/fb0/evdev (vedi docs/COMPAT.md).

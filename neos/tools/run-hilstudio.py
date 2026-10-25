@@ -128,7 +128,15 @@ try:
     h = f'http://10.0.2.2:{a.http_port}'
     run(f'pkg install pip:--trusted-host 10.0.2.2 --no-index --no-deps --find-links {h}/ -r {h}/req.txt')
     run(f'run /bin/busybox sh -c "mkdir -p /opt/hil && cd /opt/hil && wget -q -O - {h}/hilstudio.tar.gz | tar xz"')
-    run('run /bin/busybox sh -c "cd /opt/hil && /opt/python3/bin/python3 -m hilstudio.server --host 0.0.0.0 --port 8800 > /tmp/hil.log 2>&1 &"', timeout=300)
+    dataenv = ''
+    if not a.no_data:
+        run('tune set neofs.max_mb 128'); run('tune set neofs.roots /data /etc/neos')
+        run('disk status')
+        fresh = 'rm -rf /data/hilstudio; ' if a.fresh else ''
+        run(f'run /bin/busybox sh -c "{fresh}mkdir -p /data/hilstudio && cd /data/hilstudio && (test -e .imported || (wget -q -O - {h}/data.tar.gz | tar xz; touch .imported))"')
+        run('disk sync')
+        dataenv = 'HILSTUDIO_DATA=/data/hilstudio '
+    run(f'run /bin/busybox sh -c "cd /opt/hil && {dataenv}/opt/python3/bin/python3 -m hilstudio.server --host 0.0.0.0 --port 8800 > /tmp/hil.log 2>&1 &"', timeout=300)
     print(f'\n[5/5] waiting for HIL Studio to answer on http://127.0.0.1:{a.port} ...', flush=True)
     for _ in range(300):
         try:
